@@ -1,5 +1,6 @@
 extern crate ash;
 
+use ash::version::DeviceV1_0;
 use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
 use std::ffi::CStr;
@@ -55,53 +56,20 @@ fn create_application() -> ash::vk::ApplicationInfo {
     application
 }
 
-unsafe extern "system" fn debug_callback(
-    _message_severity: ash::vk::DebugUtilsMessageSeverityFlagsEXT,
-    _message_types: ash::vk::DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const ash::vk::DebugUtilsMessengerCallbackDataEXT,
-    _p_user_data: *mut std::ffi::c_void,
-) -> ash::vk::Bool32 {
-    println!(
-        "validation layer: {}",
-        CStr::from_ptr((*p_callback_data).p_message)
-            .to_str()
-            .expect("Cannot convert debug message to Rust string")
-    );
-    1
-}
-
 unsafe fn create_instance(
     entry: &ash::Entry,
     application_info: ash::vk::ApplicationInfo,
 ) -> ash::Instance {
-    let _instance_extensions: std::vec::Vec<*const i8> = vec![
-        ash::extensions::ext::DebugReport::name().as_ptr(),
-        ash::extensions::ext::DebugUtils::name().as_ptr(),
-    ];
-    let _debug_messenger_create_info = ash::vk::DebugUtilsMessengerCreateInfoEXT {
-        s_type: ash::vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-        p_next: std::ptr::null(),
-        flags: Default::default(),
-        message_severity: ash::vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-            | ash::vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-            | ash::vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-        message_type: ash::vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-            | ash::vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-            | ash::vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-        pfn_user_callback: Some(debug_callback),
-        p_user_data: std::ptr::null_mut(),
-    };
-    let layers =
-        vec![CString::new("VK_LAYER_LUNARG_standard_validation").expect("Cannot create c-string")];
+    let layers = vec![CString::new("VK_LAYER_KHRONOS_validation").expect("Cannot create c-string")];
     let instance_create_info = ash::vk::InstanceCreateInfo {
         s_type: ash::vk::StructureType::INSTANCE_CREATE_INFO,
-        p_next: Box::into_raw(Box::new(_debug_messenger_create_info)) as *const std::ffi::c_void,
+        p_next: std::ptr::null(),
         flags: Default::default(),
         p_application_info: &application_info,
         enabled_layer_count: layers.len() as u32,
         pp_enabled_layer_names: layers.as_ptr() as *const *const c_char,
-        enabled_extension_count: _instance_extensions.len() as u32,
-        pp_enabled_extension_names: _instance_extensions.as_ptr(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: std::ptr::null(),
     };
     let instance: ash::Instance = entry
         .create_instance(&instance_create_info, None)
@@ -115,7 +83,6 @@ unsafe fn pick_up_one_gpu(
     let physical_devices = instance
         .enumerate_physical_devices()
         .expect("Cannot enumerate physical devices");
-    println!("number of physical device {}", physical_devices.len());
     if physical_devices.is_empty() {
         Err("Cannot get physical devices because none was found")
     } else {
@@ -142,8 +109,7 @@ unsafe fn create_logical_device(
 ) -> ash::Device {
     let queue_priority = 1.0_f32;
     let device_queue_create_info = ash::vk::DeviceQueueCreateInfo {
-        s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
-        // s_type: ash::vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+        s_type: ash::vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
         p_next: std::ptr::null(),
         flags: Default::default(),
         queue_family_index: index_of_queue_family as u32,
@@ -152,8 +118,7 @@ unsafe fn create_logical_device(
     };
     let device_features = instance.get_physical_device_features(gpu);
     let device_create_info = ash::vk::DeviceCreateInfo {
-        s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
-        // s_type: ash::vk::StructureType::DEVICE_CREATE_INFO,
+        s_type: ash::vk::StructureType::DEVICE_CREATE_INFO,
         p_next: std::ptr::null(),
         flags: Default::default(),
         queue_create_info_count: 1 as u32,
@@ -181,6 +146,8 @@ fn main() {
         let index_of_queue_family =
             pick_up_one_queue_family(queue_families_properties, ash::vk::QueueFlags::COMPUTE)
                 .expect("Cannot get queue family property");
-        let _logical_device = create_logical_device(&instance, gpu, index_of_queue_family);
+        let logical_device = create_logical_device(&instance, gpu, index_of_queue_family);
+        logical_device.destroy_device(None);
+        instance.destroy_instance(None);
     }
 }
