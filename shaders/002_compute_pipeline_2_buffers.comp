@@ -1,0 +1,18 @@
+#version 440 core
+
+layout (local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+
+layout (set = 0, binding = 5) buffer _values1 {
+    uint value[128];
+} v1;
+
+layout (set = 1, binding = 10) buffer _values2 {
+    uint value[256];
+} v2;
+
+void main(void) 
+{
+    v1.value[gl_LocalInvocationID.x] = gl_LocalInvocationID.x;
+    v2.value[gl_LocalInvocationID.x*2] = gl_LocalInvocationID.x;
+    v2.value[gl_LocalInvocationID.x*2+1] = gl_LocalInvocationID.x * 1000;
+}
