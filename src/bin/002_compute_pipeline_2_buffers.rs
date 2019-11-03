@@ -10,6 +10,7 @@ use std::ffi::CString;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
+#[allow(dead_code)]
 unsafe fn print_instance_layers(entry: &ash::Entry) {
     let instance_layers_properties = entry
         .enumerate_instance_layer_properties()
@@ -24,6 +25,7 @@ unsafe fn print_instance_layers(entry: &ash::Entry) {
     }
 }
 
+#[allow(dead_code)]
 unsafe fn print_instance_extensions(entry: &ash::Entry) {
     let instance_extensions = entry
         .enumerate_instance_extension_properties()
@@ -313,7 +315,7 @@ unsafe fn create_compute_pipeline(
     pipeline_layout: vk::PipelineLayout,
 ) -> vk::Pipeline {
     let mut file = std::fs::File::open(
-        "/home/jordanbrion/Documents/rust/vk_001_compute_pipeline/shaders/simple.comp.spv",
+        "/home/jordanbrion/Documents/rust/vk_001_compute_pipeline/shaders/comp.spv",
     )
     .expect("Something went wrong opening the shader");
     let spirv_data =
@@ -355,13 +357,13 @@ unsafe fn create_compute_pipeline(
 unsafe fn create_descriptor_pool(logical_device: &ash::Device) -> ash::vk::DescriptorPool {
     let descriptor_pool_size = ash::vk::DescriptorPoolSize {
         ty: ash::vk::DescriptorType::STORAGE_BUFFER,
-        descriptor_count: 1,
+        descriptor_count: 2,
     };
     let descriptor_pool_create_info = ash::vk::DescriptorPoolCreateInfo {
         s_type: ash::vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
         p_next: std::ptr::null(),
-        flags: Default::default(), //ash::vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET,
-        max_sets: 1,
+        flags: Default::default(),
+        max_sets: 2,
         pool_size_count: 1,
         p_pool_sizes: &descriptor_pool_size,
     };
@@ -402,11 +404,12 @@ unsafe fn print_buffer_content<T>(
             ash::vk::MemoryMapFlags::empty(),
         )
         .expect("Cannot map memory");
-    println!("number of elements: {}", buffer.number_of_elements());
     let gpu_array = std::slice::from_raw_parts(p_memory as *const u32, buffer.number_of_elements());
-    // for a in gpu_array {
-    //     println!("value is {}", a);
-    // }
+    println!("n = {}", buffer.number_of_elements());
+    for a in gpu_array {
+        println!("value is {}", a);
+    }
+    logical_device.unmap_memory(device_memory);
 }
 
 fn main() {
@@ -421,8 +424,8 @@ fn main() {
             pick_up_one_queue_family(queue_families_properties, ash::vk::QueueFlags::COMPUTE)
                 .expect("Cannot get queue family property");
         let logical_device = create_logical_device(&instance, gpu, index_of_queue_family);
-        let buffer1 = Buffer::<u32>::new(&logical_device, 1024);
-        let buffer2 = Buffer::<u32>::new(&logical_device, 2048);
+        let buffer1 = Buffer::<u32>::new(&logical_device, 128);
+        let buffer2 = Buffer::<u32>::new(&logical_device, 256);
         let memory_type_index =
             get_memory_type_index(vk::MemoryPropertyFlags::HOST_VISIBLE, &instance, gpu)
                 .expect("no memory type found");
@@ -440,29 +443,52 @@ fn main() {
         let descriptor_set_layouts = create_descriptor_set_layouts(&logical_device);
         let descriptor_set_layout1 = descriptor_set_layouts[0];
         let descriptor_set_layout2 = descriptor_set_layouts[1];
-        let pipeline_layout = create_pipeline_layout(&logical_device, &[descriptor_set_layout1, descriptor_set_layout2]);
+        let pipeline_layout = create_pipeline_layout(&logical_device, &descriptor_set_layouts);
         let compute_pipeline = create_compute_pipeline(&logical_device, pipeline_layout);
         let descriptor_pool = create_descriptor_pool(&logical_device);
-        let descriptor_set =
+        let descriptor_set1 =
             allocate_descriptor_set(&logical_device, descriptor_pool, descriptor_set_layout1);
-        let descriptor_buffer_info = ash::vk::DescriptorBufferInfo {
-            buffer: buffer1.vk_handle,
-            offset: 0,
-            range: ash::vk::WHOLE_SIZE,
-        };
-        let descriptor_write = vk::WriteDescriptorSet {
-            s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
-            p_next: std::ptr::null(),
-            dst_set: descriptor_set,
-            dst_binding: 5,
-            dst_array_element: 0,
-            descriptor_count: 1,
-            descriptor_type: ash::vk::DescriptorType::STORAGE_BUFFER,
-            p_image_info: std::ptr::null(),
-            p_buffer_info: &descriptor_buffer_info,
-            p_texel_buffer_view: std::ptr::null(),
-        };
-        logical_device.update_descriptor_sets(&[descriptor_write], &[]);
+        let descriptor_set2 =
+            allocate_descriptor_set(&logical_device, descriptor_pool, descriptor_set_layout2);
+        let descriptor_buffer_infos = vec![
+            ash::vk::DescriptorBufferInfo {
+                buffer: buffer1.vk_handle,
+                offset: 0,
+                range: ash::vk::WHOLE_SIZE,
+            },
+            ash::vk::DescriptorBufferInfo {
+                buffer: buffer2.vk_handle,
+                offset: 0,
+                range: ash::vk::WHOLE_SIZE,
+            },
+        ];
+        let descriptor_writes = vec![
+            vk::WriteDescriptorSet {
+                s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
+                p_next: std::ptr::null(),
+                dst_set: descriptor_set1,
+                dst_binding: 5,
+                dst_array_element: 0,
+                descriptor_count: 1,
+                descriptor_type: ash::vk::DescriptorType::STORAGE_BUFFER,
+                p_image_info: std::ptr::null(),
+                p_buffer_info: &descriptor_buffer_infos[0],
+                p_texel_buffer_view: std::ptr::null(),
+            },
+            vk::WriteDescriptorSet {
+                s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
+                p_next: std::ptr::null(),
+                dst_set: descriptor_set2,
+                dst_binding: 10,
+                dst_array_element: 0,
+                descriptor_count: 1,
+                descriptor_type: ash::vk::DescriptorType::STORAGE_BUFFER,
+                p_image_info: std::ptr::null(),
+                p_buffer_info: &descriptor_buffer_infos[1],
+                p_texel_buffer_view: std::ptr::null(),
+            },
+        ];
+        logical_device.update_descriptor_sets(&descriptor_writes, &[]);
         let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
             s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: std::ptr::null(),
@@ -482,7 +508,7 @@ fn main() {
             ash::vk::PipelineBindPoint::COMPUTE,
             pipeline_layout,
             0,
-            &[descriptor_set],
+            &[descriptor_set1, descriptor_set2],
             &[],
         );
         logical_device.cmd_dispatch(dispatch_command_buffer, 1, 1, 1);
@@ -506,6 +532,14 @@ fn main() {
         logical_device
             .queue_wait_idle(queue)
             .expect("Cannot wait for queue");
+        println!("****** 1st buffer content");
         print_buffer_content(&logical_device, allocator.memory, 0, &buffer1);
+        println!("****** 2nd  buffer content");
+        print_buffer_content(
+            &logical_device,
+            allocator.memory,
+            buffer1.size_in_bytes,
+            &buffer2,
+        );
     }
 }
