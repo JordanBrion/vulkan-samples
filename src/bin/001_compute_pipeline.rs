@@ -64,21 +64,6 @@ fn create_application() -> vk::ApplicationInfo {
     application
 }
 
-unsafe extern "system" fn debugCallback(
-    message_severity: ash::vk::DebugUtilsMessageSeverityFlagsEXT,
-    message_types: ash::vk::DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const ash::vk::DebugUtilsMessengerCallbackDataEXT,
-    p_user_data: *mut std::ffi::c_void,
-) -> ash::vk::Bool32 {
-    println!(
-        "validation layer: {}",
-        CStr::from_ptr((*p_callback_data).p_message)
-            .to_str()
-            .expect("Cannot convert debug message to Rust string")
-    );
-    1
-}
-
 unsafe fn create_instance(
     entry: &ash::Entry,
     application_info: vk::ApplicationInfo,
@@ -309,7 +294,7 @@ unsafe fn create_compute_pipeline(
     pipeline_layout: vk::PipelineLayout,
 ) -> vk::Pipeline {
     let mut file = std::fs::File::open(
-        "/home/jordanbrion/Documents/rust/vk_001_compute_pipeline/shaders/simple.comp.spv",
+        "/home/jordanbrion/Documents/rust/vk_001_compute_pipeline/shaders/001_compute_pipeline.comp.spv",
     )
     .expect("Something went wrong opening the shader");
     let spirv_data =
