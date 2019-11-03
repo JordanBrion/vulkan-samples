@@ -147,7 +147,10 @@ fn main() {
             pick_up_one_queue_family(queue_families_properties, ash::vk::QueueFlags::COMPUTE)
                 .expect("Cannot get queue family property");
         let logical_device = create_logical_device(&instance, gpu, index_of_queue_family);
-        logical_device.destroy_device(None);
+
+        // line is commented to trigger error from validation layer
+        // logical_device.destroy_device(None);
+        
         instance.destroy_instance(None);
     }
 }
