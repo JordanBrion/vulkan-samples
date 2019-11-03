@@ -83,32 +83,16 @@ unsafe fn create_instance(
     entry: &ash::Entry,
     application_info: vk::ApplicationInfo,
 ) -> ash::Instance {
-    let instance_extensions: std::vec::Vec<*const i8> =
-        vec![ash::extensions::ext::DebugReport::name().as_ptr()];
-    let debugMessengerCreateInfo = ash::vk::DebugUtilsMessengerCreateInfoEXT {
-        s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+    let layers = vec![CString::new("VK_LAYER_KHRONOS_validation").expect("Cannot create c-string")];
+    let instance_create_info = ash::vk::InstanceCreateInfo {
+        s_type: ash::vk::StructureType::INSTANCE_CREATE_INFO,
         p_next: std::ptr::null(),
         flags: Default::default(),
-        message_severity: ash::vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-            | ash::vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-            | ash::vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-        message_type: ash::vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-            | ash::vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-            | ash::vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-        pfn_user_callback: Some(debugCallback),
-        p_user_data: std::ptr::null_mut(),
-    };
-    let validation_layers =
-        vec![CString::new("VK_LAYER_LUNARG_standard_validation").expect("Cannot create c-string")];
-    let instance_create_info = vk::InstanceCreateInfo {
-        s_type: vk::StructureType::INSTANCE_CREATE_INFO,
-        p_next: std::ptr::null(), //Box::into_raw(Box::new(debugMessengerCreateInfo)) as *const std::ffi::c_void, //std::ptr::null(),
-        flags: Default::default(),
         p_application_info: &application_info,
-        enabled_layer_count: 0, //validation_layers.len() as u32,
-        pp_enabled_layer_names: std::ptr::null(), //validation_layers.as_ptr() as *const *const c_char,
-        enabled_extension_count: 0, //instance_extensions.len() as u32,
-        pp_enabled_extension_names: std::ptr::null(), //instance_extensions.as_ptr(),
+        enabled_layer_count: layers.len() as u32,
+        pp_enabled_layer_names: layers.as_ptr() as *const *const c_char,
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: std::ptr::null(),
     };
     let instance: ash::Instance = entry
         .create_instance(&instance_create_info, None)
