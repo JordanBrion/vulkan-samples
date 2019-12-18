@@ -202,6 +202,21 @@ fn main() {
             alpha_to_one_enable: ash::vk::FALSE,
         };
 
+        let depth_stencil_state_create_info = ash::vk::PipelineDepthStencilStateCreateInfo {
+            s_type: ash::vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+p_next: std::ptr::null(),
+flags: Default::default(),
+depth_test_enable: ash::vk::TRUE,
+depth_write_enable: ash::vk::TRUE,
+depth_compare_op: ash::vk::CompareOp::LESS,
+depth_bounds_test_enable: ash::vk::FALSE,
+stencil_test_enable: ash::vk::
+front: StencilOpState
+back: StencilOpState
+min_depth_bounds: f32
+max_depth_bounds: f32
+        };
+
         //                 let graphics_pipeline_create_info = ash::vk::GraphicsPipelineCreateInfo {
         //         s_type: ash::vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
         //         p_next: std::ptr::null(),
