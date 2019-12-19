@@ -204,18 +204,68 @@ fn main() {
 
         let depth_stencil_state_create_info = ash::vk::PipelineDepthStencilStateCreateInfo {
             s_type: ash::vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-p_next: std::ptr::null(),
-flags: Default::default(),
-depth_test_enable: ash::vk::TRUE,
-depth_write_enable: ash::vk::TRUE,
-depth_compare_op: ash::vk::CompareOp::LESS,
-depth_bounds_test_enable: ash::vk::FALSE,
-stencil_test_enable: ash::vk::
-front: StencilOpState
-back: StencilOpState
-min_depth_bounds: f32
-max_depth_bounds: f32
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            depth_test_enable: ash::vk::TRUE,
+            depth_write_enable: ash::vk::TRUE,
+            depth_compare_op: ash::vk::CompareOp::LESS,
+            depth_bounds_test_enable: ash::vk::FALSE,
+            stencil_test_enable: ash::vk::FALSE,
+            front: Default::default(),
+            back: Default::default(),
+            min_depth_bounds: 0f32,
+            max_depth_bounds: 1f32,
         };
+
+        let color_blend_state_create_info = ash::vk::PipelineColorBlendStateCreateInfo {
+            s_type: ash::vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            logic_op_enable: ash::vk::FALSE,
+            logic_op: ash::vk::LogicOp::NO_OP,
+            attachment_count: 0 as u32,
+            p_attachments: std::ptr::null(),
+            blend_constants: [0f32; 4],
+        };
+
+        let dynamic_state_create_info = ash::vk::PipelineDynamicStateCreateInfo {
+            s_type: ash::vk::StructureType::PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            dynamic_state_count: 0 as u32,
+            p_dynamic_states: std::ptr::null(),
+        };
+
+        let pipeline_layout_create_info = ash::vk::PipelineLayoutCreateInfo {
+            s_type: ash::vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            set_layout_count: 0,
+            p_set_layouts: std::ptr::null(),
+            push_constant_range_count: 0,
+            p_push_constant_ranges: std::ptr::null()
+        };
+        let pipeline_layout = logical_device.create_pipeline_layout(&pipeline_layout_create_info, None);
+
+        let subpass_description = ash::vk::SubpassDescription {
+            
+        };
+
+        let attachment_description = ash::vk::AttachmentDescription {
+            
+        };
+        let render_pass_create_info = ash::vk::RenderPassCreateInfo {
+            s_type: ash::vk::StructureType::RENDER_PASS_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            attachment_count: 1,
+            p_attachments: &attachment_description,
+            subpass_count: 1,
+            p_subpasses: &subpass_description,
+            dependency_count: 0,
+            p_dependencies: std::ptr::null()
+        };
+        let render_pass = logical_device.create_render_pass(&render_pass_create_info, None);
 
         //                 let graphics_pipeline_create_info = ash::vk::GraphicsPipelineCreateInfo {
         //         s_type: ash::vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
@@ -229,10 +279,10 @@ max_depth_bounds: f32
         //         p_viewport_state: &viewport_state_create_info,
         //         p_rasterization_state: &rasterization_state_create_info,
         //         p_multisample_state: &multisample_state_create_info,
-        // p_depth_stencil_state: *const PipelineDepthStencilStateCreateInfo
-        // p_color_blend_state: *const PipelineColorBlendStateCreateInfo
-        // p_dynamic_state: *const PipelineDynamicStateCreateInfo
-        // layout: PipelineLayout
+        // p_depth_stencil_state: &depth_stencil_state_create_info,
+        // p_color_blend_state: &color_blend_state_create_info,
+        // p_dynamic_state: &dynamic_state_create_info,
+        // layout: pipeline_layout
         // render_pass: RenderPass
         // subpass: u32
         // base_pipeline_handle: Pipeline
