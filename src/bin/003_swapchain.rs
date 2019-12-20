@@ -247,13 +247,31 @@ fn main() {
         };
         let pipeline_layout = logical_device.create_pipeline_layout(&pipeline_layout_create_info, None);
 
-        let subpass_description = ash::vk::SubpassDescription {
-            
+        let attachment_description = ash::vk::AttachmentDescription {
+            flags: ash::vk::AttachmentDescriptionFlags::MAY_ALIAS,
+            format: ash::vk::Format::R8G8B8_UINT,
+            samples: ash::vk::SampleCountFlags::TYPE_1,
+            load_op: ash::vk::AttachmentLoadOp::CLEAR,
+            store_op: ash::vk::AttachmentStoreOp::STORE,
+            stencil_load_op: ash::vk::AttachmentLoadOp::DONT_CARE,
+            stencil_store_op: ash::vk::AttachmentStoreOp::DONT_CARE,
+            initial_layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            final_layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
         };
 
-        let attachment_description = ash::vk::AttachmentDescription {
-            
+        let subpass_description = ash::vk::SubpassDescription {
+            flags: ash::vk::SubpassDescriptionFlags::
+pipeline_bind_point: PipelineBindPoint
+input_attachment_count: u32
+p_input_attachments: *const AttachmentReference
+color_attachment_count: u32
+p_color_attachments: *const AttachmentReference
+p_resolve_attachments: *const AttachmentReference
+p_depth_stencil_attachment: *const AttachmentReference
+preserve_attachment_count: u32
+p_preserve_attachments: *const u32
         };
+
         let render_pass_create_info = ash::vk::RenderPassCreateInfo {
             s_type: ash::vk::StructureType::RENDER_PASS_CREATE_INFO,
             p_next: std::ptr::null(),
