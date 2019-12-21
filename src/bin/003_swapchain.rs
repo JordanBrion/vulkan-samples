@@ -127,6 +127,7 @@ fn main() {
             lookup_queue_family_index(&instance, &gpu).expect("Cannot find graphics queue family");
         let logical_device = create_logical_device(&instance, &gpu, index_of_queue_family)
             .expect("Cannot create logical device");
+        let queue = logical_device.get_device_queue(index_of_queue_family as u32, 0);
 
         let shader_entry_name =
             CString::new("main").expect("Cannot create vertex shader entry name");
@@ -243,9 +244,12 @@ fn main() {
             set_layout_count: 0,
             p_set_layouts: std::ptr::null(),
             push_constant_range_count: 0,
-            p_push_constant_ranges: std::ptr::null()
+            p_push_constant_ranges: std::ptr::null(),
         };
-        let pipeline_layout = logical_device.create_pipeline_layout(&pipeline_layout_create_info, None);
+
+        let pipeline_layout = logical_device
+            .create_pipeline_layout(&pipeline_layout_create_info, None)
+            .expect("Cannot create pipeline layout");
 
         let attachment_description = ash::vk::AttachmentDescription {
             flags: ash::vk::AttachmentDescriptionFlags::MAY_ALIAS,
@@ -255,21 +259,31 @@ fn main() {
             store_op: ash::vk::AttachmentStoreOp::STORE,
             stencil_load_op: ash::vk::AttachmentLoadOp::DONT_CARE,
             stencil_store_op: ash::vk::AttachmentStoreOp::DONT_CARE,
-            initial_layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            final_layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            initial_layout: ash::vk::ImageLayout::UNDEFINED,
+            final_layout: ash::vk::ImageLayout::PRESENT_SRC_KHR,
+        };
+
+        let color_attachment_reference = ash::vk::AttachmentReference {
+            attachment: 0,
+            layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        let depth_attachment_reference = ash::vk::AttachmentReference {
+            attachment: 0,
+            layout: ash::vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
         let subpass_description = ash::vk::SubpassDescription {
-            flags: ash::vk::SubpassDescriptionFlags::
-pipeline_bind_point: PipelineBindPoint
-input_attachment_count: u32
-p_input_attachments: *const AttachmentReference
-color_attachment_count: u32
-p_color_attachments: *const AttachmentReference
-p_resolve_attachments: *const AttachmentReference
-p_depth_stencil_attachment: *const AttachmentReference
-preserve_attachment_count: u32
-p_preserve_attachments: *const u32
+            flags: Default::default(),
+            pipeline_bind_point: ash::vk::PipelineBindPoint::GRAPHICS,
+            input_attachment_count: 0,
+            p_input_attachments: std::ptr::null(),
+            color_attachment_count: 1,
+            p_color_attachments: &color_attachment_reference,
+            p_resolve_attachments: std::ptr::null(),
+            p_depth_stencil_attachment: &depth_attachment_reference,
+            preserve_attachment_count: 0,
+            p_preserve_attachments: std::ptr::null(),
         };
 
         let render_pass_create_info = ash::vk::RenderPassCreateInfo {
@@ -281,31 +295,101 @@ p_preserve_attachments: *const u32
             subpass_count: 1,
             p_subpasses: &subpass_description,
             dependency_count: 0,
-            p_dependencies: std::ptr::null()
+            p_dependencies: std::ptr::null(),
         };
-        let render_pass = logical_device.create_render_pass(&render_pass_create_info, None);
+        let render_pass = logical_device
+            .create_render_pass(&render_pass_create_info, None)
+            .expect("Cannot create render pass");
 
-        //                 let graphics_pipeline_create_info = ash::vk::GraphicsPipelineCreateInfo {
-        //         s_type: ash::vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
-        //         p_next: std::ptr::null(),
-        //         flags: ash::vk::PipelineCreateFlags::DISABLE_OPTIMIZATION,
-        //         stage_count: v_pipeline_shader_stage_create_infos.len(),
-        //         p_stages: v_pipeline_shader_stage_create_infos.as_ptr(),
-        //         p_vertex_input_state: std::ptr::null(),
-        //         p_input_assembly_state: std::ptr::null(),
-        //         p_tessellation_state: std::ptr::null(),
-        //         p_viewport_state: &viewport_state_create_info,
-        //         p_rasterization_state: &rasterization_state_create_info,
-        //         p_multisample_state: &multisample_state_create_info,
-        // p_depth_stencil_state: &depth_stencil_state_create_info,
-        // p_color_blend_state: &color_blend_state_create_info,
-        // p_dynamic_state: &dynamic_state_create_info,
-        // layout: pipeline_layout
-        // render_pass: RenderPass
-        // subpass: u32
-        // base_pipeline_handle: Pipeline
-        // base_pipeline_index: i32
-        //         };
+        let graphics_pipeline_create_info = ash::vk::GraphicsPipelineCreateInfo {
+            s_type: ash::vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: ash::vk::PipelineCreateFlags::DISABLE_OPTIMIZATION,
+            stage_count: v_pipeline_shader_stage_create_infos.len() as u32,
+            p_stages: v_pipeline_shader_stage_create_infos.as_ptr(),
+            p_vertex_input_state: std::ptr::null(),
+            p_input_assembly_state: std::ptr::null(),
+            p_tessellation_state: std::ptr::null(),
+            p_viewport_state: &viewport_state_create_info,
+            p_rasterization_state: &rasterization_state_create_info,
+            p_multisample_state: &multisample_state_create_info,
+            p_depth_stencil_state: &depth_stencil_state_create_info,
+            p_color_blend_state: &color_blend_state_create_info,
+            p_dynamic_state: &dynamic_state_create_info,
+            layout: pipeline_layout,
+            render_pass: render_pass,
+            subpass: 0,
+            base_pipeline_handle: ash::vk::Pipeline::null(),
+            base_pipeline_index: -1,
+        };
+
+        let v_graphics_pipelines = logical_device
+            .create_graphics_pipelines(
+                ash::vk::PipelineCache::null(),
+                &[graphics_pipeline_create_info],
+                None,
+            )
+            .expect("Cannot create graphics pipeline");
+
+        let graphics_pipeline = v_graphics_pipelines[0];
+
+        let command_pool_create_info = ash::vk::CommandPoolCreateInfo {
+            s_type: ash::vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: ash::vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            queue_family_index: index_of_queue_family as u32,
+        };
+
+        let command_pool = logical_device
+            .create_command_pool(&command_pool_create_info, None)
+            .expect("Cannot create command pool");
+        let command_buffer_allocate_info = ash::vk::CommandBufferAllocateInfo {
+            s_type: ash::vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            command_pool: command_pool,
+            level: ash::vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: 1,
+        };
+
+        let v_command_buffers = logical_device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .expect("Cannot allocate command buffer");
+
+        let command_buffer = v_command_buffers[0];
+
+        let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
+            s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: std::ptr::null(),
+            flags: ash::vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info: std::ptr::null(),
+        };
+        logical_device
+            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+            .expect("Cannot begin command buffer");
+        logical_device.cmd_bind_pipeline(
+            command_buffer,
+            ash::vk::PipelineBindPoint::GRAPHICS,
+            graphics_pipeline,
+        );
+        logical_device
+            .end_command_buffer(command_buffer)
+            .expect("Cannot end command buffer");
+
+        let submit_info = ash::vk::SubmitInfo {
+            s_type: ash::vk::StructureType::SUBMIT_INFO,
+            p_next: std::ptr::null(),
+            wait_semaphore_count: 0,
+            p_wait_semaphores: std::ptr::null(),
+            p_wait_dst_stage_mask: std::ptr::null(),
+            command_buffer_count: 1,
+            p_command_buffers: &command_buffer,
+            signal_semaphore_count: 0,
+            p_signal_semaphores: std::ptr::null(),
+        };
+        logical_device
+            .queue_submit(queue, &[submit_info], ash::vk::Fence::null())
+            .expect("Cannot submit queue");
+
         // logical_device.create_graphics_pipelines(ash::vk::PipelineCache::null(),
         //                                         &[graphics_pipeline_create_info],
         //                                         None);
