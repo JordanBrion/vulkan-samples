@@ -1,0 +1,1 @@
+glslangValidator -V my_glsl_shader.type -o my_glsl_shader.type.spv
