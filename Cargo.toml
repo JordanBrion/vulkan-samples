@@ -6,3 +6,4 @@ authors = ["jordanbrion"]
 [dependencies]
 ash = "0.29.0"
 sdl2 = "0.32.2"
+num = "0.2.0"
