@@ -157,6 +157,7 @@ fn handle_events(event_pump: &mut sdl2::EventPump) -> bool {
     true
 }
 
+const FRAME_COUNT: usize = 2;
 fn main() {
     unsafe {
         let sdl_context = sdl2::init().unwrap();
@@ -312,7 +313,10 @@ fn main() {
 
         let scissor = ash::vk::Rect2D {
             offset: ash::vk::Offset2D { x: 0, y: 0 },
-            extent: ash::vk::Extent2D { width: extent.width, height: extent.height }
+            extent: ash::vk::Extent2D {
+                width: extent.width,
+                height: extent.height,
+            },
         };
 
         let viewport_state_create_info = ash::vk::PipelineViewportStateCreateInfo {
@@ -332,8 +336,8 @@ fn main() {
             depth_clamp_enable: ash::vk::FALSE,
             rasterizer_discard_enable: ash::vk::FALSE,
             polygon_mode: ash::vk::PolygonMode::FILL,
-            cull_mode: ash::vk::CullModeFlags::BACK,
-            front_face: ash::vk::FrontFace::COUNTER_CLOCKWISE,
+            cull_mode: ash::vk::CullModeFlags::FRONT,
+            front_face: ash::vk::FrontFace::CLOCKWISE,
             depth_bias_enable: ash::vk::FALSE,
             depth_bias_constant_factor: 0f32,
             depth_bias_clamp: 0f32,
@@ -376,7 +380,10 @@ fn main() {
             src_alpha_blend_factor: ash::vk::BlendFactor::ONE,
             dst_alpha_blend_factor: ash::vk::BlendFactor::ZERO,
             alpha_blend_op: ash::vk::BlendOp::ADD,
-            color_write_mask: ash::vk::ColorComponentFlags::R | ash::vk::ColorComponentFlags::G | ash::vk::ColorComponentFlags::B | ash::vk::ColorComponentFlags::A
+            color_write_mask: ash::vk::ColorComponentFlags::R
+                | ash::vk::ColorComponentFlags::G
+                | ash::vk::ColorComponentFlags::B
+                | ash::vk::ColorComponentFlags::A,
         };
 
         let color_blend_state_create_info = ash::vk::PipelineColorBlendStateCreateInfo {
@@ -442,17 +449,6 @@ fn main() {
             p_preserve_attachments: std::ptr::null(),
         };
 
-        let subpass_dependency = ash::vk::SubpassDependency {
-            src_subpass: ash::vk::SUBPASS_EXTERNAL,
-            dst_subpass: 0,
-            src_stage_mask: ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            dst_stage_mask: ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: ash::vk::AccessFlags::empty(),
-            dst_access_mask: ash::vk::AccessFlags::COLOR_ATTACHMENT_READ
-                | ash::vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            dependency_flags: Default::default(),
-        };
-
         let render_pass_create_info = ash::vk::RenderPassCreateInfo {
             s_type: ash::vk::StructureType::RENDER_PASS_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -461,8 +457,8 @@ fn main() {
             p_attachments: &attachment_description,
             subpass_count: 1,
             p_subpasses: &subpass_description,
-            dependency_count: 1,
-            p_dependencies: &subpass_dependency,
+            dependency_count: 0,
+            p_dependencies: std::ptr::null(),
         };
         let render_pass = logical_device
             .create_render_pass(&render_pass_create_info, None)
@@ -540,24 +536,25 @@ fn main() {
             );
         }
 
-        const FRAME_COUNT: usize = 1;
-        let mut v_framebuffers: [ash::vk::Framebuffer; FRAME_COUNT] =
-            [Default::default(); FRAME_COUNT];
-        for (index, framebuffer) in (&mut v_framebuffers).iter_mut().enumerate() {
+        let swapchain_size = v_swapchain_images.len();
+        let mut v_framebuffers = Vec::with_capacity(swapchain_size);
+        for i in 0..swapchain_size {
             let framebuffer_create_info = ash::vk::FramebufferCreateInfo {
                 s_type: ash::vk::StructureType::FRAMEBUFFER_CREATE_INFO,
                 p_next: std::ptr::null(),
                 flags: Default::default(),
                 render_pass: render_pass,
                 attachment_count: 1,
-                p_attachments: &v_image_views[index],
+                p_attachments: &v_image_views[i],
                 width: extent.width,
                 height: extent.height,
                 layers: 1,
             };
-            *framebuffer = logical_device
-                .create_framebuffer(&framebuffer_create_info, None)
-                .expect("Cannot create framebuffer");
+            v_framebuffers.push(
+                logical_device
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .expect("Cannot create framebuffer"),
+            );
         }
 
         let command_pool_create_info = ash::vk::CommandPoolCreateInfo {
@@ -576,7 +573,7 @@ fn main() {
             p_next: std::ptr::null(),
             command_pool: command_pool,
             level: ash::vk::CommandBufferLevel::PRIMARY,
-            command_buffer_count: FRAME_COUNT as u32,
+            command_buffer_count: swapchain_size as u32,
         };
 
         let v_command_buffers = logical_device
@@ -584,18 +581,15 @@ fn main() {
             .expect("Cannot allocate command buffer");
 
         for (index, command_buffer) in (&v_command_buffers).iter().enumerate() {
-
             let render_area = ash::vk::Rect2D {
                 offset: ash::vk::Offset2D { x: 0, y: 0 },
                 extent: extent,
             };
-    
             let clear_values = ash::vk::ClearValue {
                 color: ash::vk::ClearColorValue {
                     float32: [0.0, 1.0, 0.0, 1.0],
                 },
             };
-    
             let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
                 s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
                 p_next: std::ptr::null(),
@@ -637,12 +631,8 @@ fn main() {
         let fence_create_info = ash::vk::FenceCreateInfo {
             s_type: ash::vk::StructureType::FENCE_CREATE_INFO,
             p_next: std::ptr::null(),
-            flags: Default::default(),
+            flags: ash::vk::FenceCreateFlags::SIGNALED,
         };
-
-        let fence_wait_gpu = logical_device
-            .create_fence(&fence_create_info, None)
-            .expect("Cannot create fence");
 
         let semaphore_acquired_image_create_info = ash::vk::SemaphoreCreateInfo {
             s_type: ash::vk::StructureType::SEMAPHORE_CREATE_INFO,
@@ -650,97 +640,104 @@ fn main() {
             flags: Default::default(),
         };
 
-        let semaphore_acquired_image = logical_device
-            .create_semaphore(&semaphore_acquired_image_create_info, None)
-            .expect("Cannot create sempahore");
-
         let semaphore_pipeline_done_create_info = ash::vk::SemaphoreCreateInfo {
             s_type: ash::vk::StructureType::SEMAPHORE_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: Default::default(),
         };
 
-        let semaphore_pipeline_done = logical_device
-            .create_semaphore(&semaphore_pipeline_done_create_info, None)
-            .expect("Cannot create sempahore");
-        // uncomment those lines
+        let v_fences_wait_gpu = [
+            logical_device
+                .create_fence(&fence_create_info, None)
+                .expect("Cannot create fence"),
+            logical_device
+                .create_fence(&fence_create_info, None)
+                .expect("Cannot create fence"),
+        ];
+        let mut v_fences_ref_wait_gpu = vec![ash::vk::Fence::null(); swapchain_size];
+        let mut v_semaphores_acquired_image = Vec::with_capacity(FRAME_COUNT);
+        let mut v_semaphores_pipeline_done = Vec::with_capacity(FRAME_COUNT);
 
-        // let mut canvas = window.into_canvas().build().expect("Cannot convert window into canvas");
-        // canvas.set_draw_color(Color::RGB(0, 255, 255));
-        // canvas.clear();
-        // canvas.present();
+        for _ in 0..FRAME_COUNT {
+            v_semaphores_acquired_image.push(
+                logical_device
+                    .create_semaphore(&semaphore_acquired_image_create_info, None)
+                    .expect("Cannot create sempahore"),
+            );
+            v_semaphores_pipeline_done.push(
+                logical_device
+                    .create_semaphore(&semaphore_pipeline_done_create_info, None)
+                    .expect("Cannot create sempahore"),
+            );
+        }
+
         let mut event_pump = sdl_context.event_pump().expect("Cannot get sdl event pump");
-        // // let mut i = 0;
         let mut go = true;
         let mut current_frame = 0;
-        // while go {
-            // i = (i + 1) % 255;
-            // canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-            // canvas.clear();
-
-            println!("looping");
-
+        while go {
             go = handle_events(&mut event_pump);
-            // break;
-            // The rest of the game loop goes here...
-            // draw
-            let acquired_image_results = swapchain_loader
+
+            logical_device
+                .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
+                .expect("Cannot wait for fences");
+
+            let infos_of_acquired_image = swapchain_loader
                 .acquire_next_image(
                     swapchain,
                     !(0 as u64),
-                    semaphore_acquired_image,
+                    v_semaphores_acquired_image[current_frame],
                     ash::vk::Fence::null(),
                 )
                 .expect("Cannot acquire next image");
 
-            println!("after acquiring");
+            let index_of_acquired_image = infos_of_acquired_image.0 as usize;
+
+            if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
+                logical_device
+                    .wait_for_fences(
+                        &[v_fences_ref_wait_gpu[index_of_acquired_image]],
+                        true,
+                        !(0 as u64),
+                    )
+                    .expect("Cannot wait for fences");
+            }
+
+            v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
+
+            logical_device
+                .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
+                .expect("Cannot reset fences");
 
             let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
             let submit_info = ash::vk::SubmitInfo {
                 s_type: ash::vk::StructureType::SUBMIT_INFO,
                 p_next: std::ptr::null(),
                 wait_semaphore_count: 1,
-                p_wait_semaphores: &semaphore_acquired_image,
+                p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
                 p_wait_dst_stage_mask: &wait_stage_submit_info
                     as *const ash::vk::PipelineStageFlags,
                 command_buffer_count: 1,
-                p_command_buffers: &v_command_buffers[0],
+                p_command_buffers: &v_command_buffers[index_of_acquired_image],
                 signal_semaphore_count: 1,
-                p_signal_semaphores: &semaphore_pipeline_done,
+                p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
             };
             logical_device
-                .queue_submit(queue, &[submit_info], fence_wait_gpu)
+                .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
                 .expect("Cannot submit queue");
-
-            logical_device
-                .wait_for_fences(&[fence_wait_gpu], true, !(0 as u64))
-                .expect("Cannot wait for fences");
 
             let present_info = ash::vk::PresentInfoKHR {
                 s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
                 p_next: std::ptr::null(),
                 wait_semaphore_count: 1,
-                p_wait_semaphores: &semaphore_pipeline_done,
+                p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
                 swapchain_count: 1,
                 p_swapchains: &swapchain,
-                p_image_indices: &acquired_image_results.0,
+                p_image_indices: &infos_of_acquired_image.0,
                 p_results: std::ptr::null_mut(),
             };
             swapchain_loader
                 .queue_present(queue, &present_info)
                 .expect("Cannot present image");
-
-            logical_device
-                .reset_fences(&[fence_wait_gpu])
-                .expect("Cannot reset fences");
-
-            current_frame += 1;
-
-            // if current_frame >= 2 {
-            //     break;
-            // }
-
-            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32));
-        // }
+        }
     }
 }
