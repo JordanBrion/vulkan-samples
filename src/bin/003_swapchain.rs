@@ -738,6 +738,8 @@ fn main() {
             swapchain_loader
                 .queue_present(queue, &present_info)
                 .expect("Cannot present image");
+
+            current_frame = (current_frame + 1) % FRAME_COUNT;
         }
     }
 }
