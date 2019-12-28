@@ -20,8 +20,8 @@ use ash::vk::Handle;
 
 #[repr(C)]
 struct MyPointData {
-      position: glm::Vector3<f32>,
-      color: glm::Vector3<f32>
+    position: glm::Vector3<f32>,
+    color: glm::Vector3<f32>,
 }
 
 unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::Instance {
@@ -124,6 +124,23 @@ unsafe fn create_shader_module(
     logical_device
         .create_shader_module(&shader_module_create_infos, None)
         .expect("Cannot create shader module")
+}
+
+unsafe fn search_physical_device_memory_type(
+    instance: &ash::Instance,
+    gpu: &ash::vk::PhysicalDevice,
+    requirements: &ash::vk::MemoryRequirements,
+    type_to_find: ash::vk::MemoryPropertyFlags,
+) -> Result<usize, &'static str> {
+    let memory_properties = instance.get_physical_device_memory_properties(*gpu);
+    for (index, memory_type) in memory_properties.memory_types.iter().enumerate() {
+        if requirements.memory_type_bits & (1 << index) > 0
+            && memory_type.property_flags.contains(type_to_find)
+        {
+            return Ok(index);
+        }
+    }
+    Err("Cannot find device memory type")
 }
 
 fn search_format(
@@ -584,6 +601,100 @@ fn main() {
             );
         }
 
+        let vertex_buffer_bytes_size = std::mem::size_of::<MyPointData>() * 3;
+        let vertex_buffer_content = vec![
+            MyPointData {
+                position: glm::Vector3 {
+                    x: 0f32,
+                    y: 0.5f32,
+                    z: 0f32,
+                },
+                color: glm::Vector3 {
+                    x: 1.0f32,
+                    y: 0f32,
+                    z: 0f32,
+                },
+            },
+            MyPointData {
+                position: glm::Vector3 {
+                    x: 0.5f32,
+                    y: -0.5f32,
+                    z: 0f32,
+                },
+                color: glm::Vector3 {
+                    x: 0f32,
+                    y: 1.0f32,
+                    z: 0f32,
+                },
+            },
+            MyPointData {
+                position: glm::Vector3 {
+                    x: -0.5f32,
+                    y: -0.5f32,
+                    z: 0f32,
+                },
+                color: glm::Vector3 {
+                    x: 0f32,
+                    y: 0f32,
+                    z: 1.0f32,
+                },
+            },
+        ];
+
+        let vertex_buffer_create_info = ash::vk::BufferCreateInfo {
+            s_type: ash::vk::StructureType::BUFFER_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            size: vertex_buffer_bytes_size as u64,
+            usage: ash::vk::BufferUsageFlags::VERTEX_BUFFER,
+            sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: std::ptr::null(),
+        };
+
+        let vertex_buffer = logical_device
+            .create_buffer(&vertex_buffer_create_info, None)
+            .expect("Cannot create buffer");
+        let vertex_buffer_memory_requirements =
+            logical_device.get_buffer_memory_requirements(vertex_buffer);
+        let index_of_memory_type = search_physical_device_memory_type(
+            &instance,
+            &gpu,
+            &vertex_buffer_memory_requirements,
+            ash::vk::MemoryPropertyFlags::HOST_COHERENT | ash::vk::MemoryPropertyFlags::HOST_VISIBLE,
+        )
+        .unwrap();
+
+        let memory_allocate_info = ash::vk::MemoryAllocateInfo {
+            s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            allocation_size: vertex_buffer_memory_requirements.size,
+            memory_type_index: index_of_memory_type as u32,
+        };
+        let device_memory = logical_device
+            .allocate_memory(&memory_allocate_info, None)
+            .expect("Cannot allocate memory");
+
+        let vertex_buffer_offset = 0 as ash::vk::DeviceSize;
+        logical_device
+            .bind_buffer_memory(vertex_buffer, device_memory, vertex_buffer_offset)
+            .expect("Cannot bind buffer memory");
+
+        let p_data = logical_device
+            .map_memory(
+                device_memory,
+                vertex_buffer_offset,
+                vertex_buffer_create_info.size,
+                Default::default(),
+            )
+            .expect("Cannot map memory");
+        std::ptr::copy_nonoverlapping(
+            vertex_buffer_content.as_ptr() as *const std::ffi::c_void,
+            p_data,
+            vertex_buffer_bytes_size,
+        );
+        logical_device.unmap_memory(device_memory);
+
         let command_pool_create_info = ash::vk::CommandPoolCreateInfo {
             s_type: ash::vk::StructureType::COMMAND_POOL_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -648,7 +759,8 @@ fn main() {
                 ash::vk::PipelineBindPoint::GRAPHICS,
                 graphics_pipeline,
             );
-            logical_device.cmd_draw(*command_buffer, 3, 1, 0, 0);
+            logical_device.cmd_bind_vertex_buffers(*command_buffer, 0, &[vertex_buffer], &[vertex_buffer_offset]);
+            logical_device.cmd_draw(*command_buffer, vertex_buffer_content.len() as u32, 1, 0, 0);
             logical_device.cmd_end_render_pass(*command_buffer);
             logical_device
                 .end_command_buffer(*command_buffer)
@@ -765,6 +877,8 @@ fn main() {
             swapchain_loader
                 .queue_present(queue, &present_info)
                 .expect("Cannot present image");
+
+            current_frame = (current_frame + 1) % FRAME_COUNT;
         }
     }
 }
