@@ -292,7 +292,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/003_swapchain.vert.spv"),
+                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/004_hello_cube.vert.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -301,7 +301,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::FRAGMENT,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/003_swapchain.frag.spv"),
+                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/004_hello_cube.frag.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -324,7 +324,7 @@ fn main() {
                 location: 2,
                 binding: 0,
                 format: ash::vk::Format::R32G32B32_SFLOAT,
-                offset: std::mem::align_of::<glm::Vector3<f32>>() as u32,
+                offset: std::mem::size_of::<glm::Vector3<f32>>() as u32
             },
         ];
 
@@ -611,8 +611,8 @@ fn main() {
                 },
                 color: glm::Vector3 {
                     x: 1.0f32,
-                    y: 0f32,
-                    z: 0f32,
+                    y: 0.0f32,
+                    z: 0.0f32,
                 },
             },
             MyPointData {
@@ -725,7 +725,7 @@ fn main() {
             };
             let clear_values = ash::vk::ClearValue {
                 color: ash::vk::ClearColorValue {
-                    float32: [0.0, 1.0, 0.0, 1.0],
+                    float32: [1.0, 0.0, 1.0, 1.0],
                 },
             };
             let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
