@@ -26,9 +26,9 @@ struct MyPointData {
 
 #[repr(C)]
 struct MyUniformBuffer {
-    mModel: glm::Mat4,
-    mView: glm::Mat4,
-    mProjection: glm::Mat4,
+    m_model: glm::Mat4,
+    m_view: glm::Mat4,
+    m_projection: glm::Mat4,
 }
 
 unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::Instance {
@@ -186,6 +186,28 @@ fn handle_events(event_pump: &mut sdl2::EventPump) -> bool {
         }
     }
     true
+}
+
+unsafe fn update_uniform_buffer(
+    logical_device: &ash::Device,
+    memory: &ash::vk::DeviceMemory,
+    matrices: &mut MyUniformBuffer,
+) {
+    matrices.m_model = glm::rotate(&matrices.m_model, 0.01, &glm::vec3(0.0, 1.0, 0.0));
+    let p_data = logical_device
+        .map_memory(
+            *memory,
+            0,
+            std::mem::size_of::<MyUniformBuffer>() as ash::vk::DeviceSize,
+            Default::default(),
+        )
+        .expect("Cannot map device memory");
+    std::ptr::copy_nonoverlapping(
+        matrices as *const MyUniformBuffer as *const std::ffi::c_void,
+        p_data,
+        std::mem::size_of::<MyUniformBuffer>(),
+    );
+    logical_device.unmap_memory(*memory);
 }
 
 const FRAME_COUNT: usize = 2;
@@ -408,7 +430,7 @@ fn main() {
             depth_clamp_enable: ash::vk::FALSE,
             rasterizer_discard_enable: ash::vk::FALSE,
             polygon_mode: ash::vk::PolygonMode::FILL,
-            cull_mode: ash::vk::CullModeFlags::FRONT,
+            cull_mode: ash::vk::CullModeFlags::NONE,
             front_face: ash::vk::FrontFace::CLOCKWISE,
             depth_bias_enable: ash::vk::FALSE,
             depth_bias_constant_factor: 0f32,
@@ -689,11 +711,11 @@ fn main() {
             },
             MyPointData {
                 position: glm::vec3(0.5f32, -0.5f32, 0f32),
-                color: glm::vec3(0f32, 1.0f32, 0f32)
+                color: glm::vec3(0f32, 1.0f32, 0f32),
             },
-             MyPointData {
+            MyPointData {
                 position: glm::vec3(-0.5f32, -0.5f32, 0f32),
-                color: glm::vec3(0f32, 0f32, 1.0f32)
+                color: glm::vec3(0f32, 0f32, 1.0f32),
             },
         ];
 
@@ -1032,6 +1054,16 @@ fn main() {
         let mut event_pump = sdl_context.event_pump().expect("Cannot get sdl event pump");
         let mut go = true;
         let mut current_frame = 0;
+        let mut matrices = MyUniformBuffer {
+            m_model: glm::identity(),
+            m_view: glm::look_at(
+                &glm::vec3(0.0, 0.0, 4.0),
+                &glm::vec3(0.0, 0.0, 0.0),
+                &glm::vec3(0.0, 1.0, 0.0),
+            ),
+            m_projection: glm::perspective(16.0f32 / 9.0f32, 45.0f32, 1.0f32, 100.0f32),
+        };
+
         while go {
             go = handle_events(&mut event_pump);
 
@@ -1065,6 +1097,12 @@ fn main() {
             logical_device
                 .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
                 .expect("Cannot reset fences");
+
+            update_uniform_buffer(
+                &logical_device,
+                &v_memory_uniform_buffers[index_of_acquired_image],
+                &mut matrices,
+            );
 
             let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
             let submit_info = ash::vk::SubmitInfo {
