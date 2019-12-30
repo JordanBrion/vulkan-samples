@@ -925,14 +925,33 @@ fn main() {
                 ash::vk::MemoryPropertyFlags::HOST_VISIBLE
                     | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
             )
-            .expect("Cannot find memory type for texture staging buffer") as u32,
+            .expect("Cannot find memory type for texture staging buffer")
+                as u32,
         };
 
         let texture_memory_staging_buffer = logical_device
             .allocate_memory(&texture_memory_staging_buffer_allocate_info, None)
             .expect("Cannot allocate memory for texture staging buffer");
 
-        logical_device.bind_buffer_memory(texture_staging_buffer, texture_memory_staging_buffer, 0).expect("Cannot bind texture buffer to its memory");
+        logical_device
+            .bind_buffer_memory(texture_staging_buffer, texture_memory_staging_buffer, 0)
+            .expect("Cannot bind texture buffer to its memory");
+
+        let p_texture_gpu_data = logical_device
+            .map_memory(
+                texture_memory_staging_buffer,
+                0,
+                texture_staging_buffer_create_info.size,
+                Default::default(),
+            )
+            .expect("Cannot map memory for texture staging buffer");
+
+        std::ptr::copy_nonoverlapping(
+            texture_data.as_ptr() as *const std::ffi::c_void,
+            p_texture_gpu_data,
+            texture_staging_buffer_create_info.size as usize,
+        );
+        logical_device.unmap_memory(texture_memory_staging_buffer);
 
         // TEXTURE: image creation
 
