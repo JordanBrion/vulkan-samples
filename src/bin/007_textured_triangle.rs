@@ -2,6 +2,7 @@ extern crate ash;
 extern crate core;
 extern crate nalgebra_glm as glm;
 extern crate num;
+extern crate png;
 extern crate sdl2;
 
 use sdl2::event::Event;
@@ -719,7 +720,7 @@ fn main() {
             },
         ];
 
-        // STAGING BUFFER CREATION
+        // VERTEX ATTRIBUTES: STAGING BUFFER CREATION
         let staging_buffer_create_info = ash::vk::BufferCreateInfo {
             s_type: ash::vk::StructureType::BUFFER_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -780,7 +781,7 @@ fn main() {
         );
         logical_device.unmap_memory(device_memory_for_staging_buffer);
 
-        // VERTEX BUFFER CREATION
+        // VERTEX ATTRIBUTES: VERTEX BUFFER CREATION
         let vertex_buffer_create_info = ash::vk::BufferCreateInfo {
             s_type: ash::vk::StructureType::BUFFER_CREATE_INFO,
             p_next: std::ptr::null(),
@@ -882,6 +883,59 @@ fn main() {
         logical_device.destroy_buffer(staging_buffer, None);
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
+        // TEXTURE: staging buffer creation
+        let decoder = png::Decoder::new(
+            std::fs::File::open(
+                "/home/jordanbrion/Documents/3dassets/VariedStoneBlockMasonryMossy_basecolor.png",
+            )
+            .expect("Cannot open texture file"),
+        );
+        let (info, mut reader) = decoder.read_info().unwrap();
+        let mut texture_data = vec![0; info.buffer_size()];
+        reader
+            .next_frame(&mut texture_data)
+            .expect("Cannot read texture data");
+
+        let texture_staging_buffer_create_info = ash::vk::BufferCreateInfo {
+            s_type: ash::vk::StructureType::BUFFER_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            size: texture_data.len() as ash::vk::DeviceSize,
+            usage: ash::vk::BufferUsageFlags::TRANSFER_SRC,
+            sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: std::ptr::null(),
+        };
+
+        let texture_staging_buffer = logical_device
+            .create_buffer(&texture_staging_buffer_create_info, None)
+            .expect("Cannot create staging buffer for texture");
+
+        let texture_staging_buffer_requirements =
+            logical_device.get_buffer_memory_requirements(texture_staging_buffer);
+
+        let texture_memory_staging_buffer_allocate_info = ash::vk::MemoryAllocateInfo {
+            s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            allocation_size: texture_staging_buffer_requirements.size,
+            memory_type_index: search_physical_device_memory_type(
+                &instance,
+                &gpu,
+                &texture_staging_buffer_requirements,
+                ash::vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | ash::vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .expect("Cannot find memory type for texture staging buffer") as u32,
+        };
+
+        let texture_memory_staging_buffer = logical_device
+            .allocate_memory(&texture_memory_staging_buffer_allocate_info, None)
+            .expect("Cannot allocate memory for texture staging buffer");
+
+        logical_device.bind_buffer_memory(texture_staging_buffer, texture_memory_staging_buffer, 0).expect("Cannot bind texture buffer to its memory");
+
+        // TEXTURE: image creation
+
         // UNIFORM BUFFERS
         let mut matrices = MyUniformBuffer {
             m_model: glm::identity(),
@@ -936,11 +990,7 @@ fn main() {
                 .bind_buffer_memory(v_uniform_buffers[i], v_memory_uniform_buffers[i], 0)
                 .expect("Cannot bind uniform buffer to its memory");
 
-                update_uniform_buffer(
-                    &logical_device,
-                    &v_memory_uniform_buffers[i],
-                    &mut matrices,
-                );
+            update_uniform_buffer(&logical_device, &v_memory_uniform_buffers[i], &mut matrices);
 
             let descriptor_buffer_info = ash::vk::DescriptorBufferInfo {
                 buffer: v_uniform_buffers[i],
@@ -1071,72 +1121,71 @@ fn main() {
         let mut go = true;
         let mut current_frame = 0;
 
-        while go {
-            go = handle_events(&mut event_pump);
+        // while go {
+        go = handle_events(&mut event_pump);
 
+        logical_device
+            .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
+            .expect("Cannot wait for fences");
+
+        let infos_of_acquired_image = swapchain_loader
+            .acquire_next_image(
+                swapchain,
+                !(0 as u64),
+                v_semaphores_acquired_image[current_frame],
+                ash::vk::Fence::null(),
+            )
+            .expect("Cannot acquire next image");
+
+        let index_of_acquired_image = infos_of_acquired_image.0 as usize;
+
+        if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
             logical_device
-                .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
-                .expect("Cannot wait for fences");
-
-            let infos_of_acquired_image = swapchain_loader
-                .acquire_next_image(
-                    swapchain,
+                .wait_for_fences(
+                    &[v_fences_ref_wait_gpu[index_of_acquired_image]],
+                    true,
                     !(0 as u64),
-                    v_semaphores_acquired_image[current_frame],
-                    ash::vk::Fence::null(),
                 )
-                .expect("Cannot acquire next image");
-
-            let index_of_acquired_image = infos_of_acquired_image.0 as usize;
-
-            if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
-                logical_device
-                    .wait_for_fences(
-                        &[v_fences_ref_wait_gpu[index_of_acquired_image]],
-                        true,
-                        !(0 as u64),
-                    )
-                    .expect("Cannot wait for fences");
-            }
-
-            v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
-
-            logical_device
-                .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
-                .expect("Cannot reset fences");
-
-            let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
-            let submit_info = ash::vk::SubmitInfo {
-                s_type: ash::vk::StructureType::SUBMIT_INFO,
-                p_next: std::ptr::null(),
-                wait_semaphore_count: 1,
-                p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
-                p_wait_dst_stage_mask: &wait_stage_submit_info
-                    as *const ash::vk::PipelineStageFlags,
-                command_buffer_count: 1,
-                p_command_buffers: &v_command_buffers[index_of_acquired_image],
-                signal_semaphore_count: 1,
-                p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
-            };
-            logical_device
-                .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
-                .expect("Cannot submit queue");
-
-            let present_info = ash::vk::PresentInfoKHR {
-                s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
-                p_next: std::ptr::null(),
-                wait_semaphore_count: 1,
-                p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
-                swapchain_count: 1,
-                p_swapchains: &swapchain,
-                p_image_indices: &infos_of_acquired_image.0,
-                p_results: std::ptr::null_mut(),
-            };
-            swapchain_loader
-                .queue_present(queue, &present_info)
-                .expect("Cannot present image");
-
-            current_frame = (current_frame + 1) % FRAME_COUNT;
+                .expect("Cannot wait for fences");
         }
+
+        v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
+
+        logical_device
+            .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
+            .expect("Cannot reset fences");
+
+        let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+        let submit_info = ash::vk::SubmitInfo {
+            s_type: ash::vk::StructureType::SUBMIT_INFO,
+            p_next: std::ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
+            p_wait_dst_stage_mask: &wait_stage_submit_info as *const ash::vk::PipelineStageFlags,
+            command_buffer_count: 1,
+            p_command_buffers: &v_command_buffers[index_of_acquired_image],
+            signal_semaphore_count: 1,
+            p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
+        };
+        logical_device
+            .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
+            .expect("Cannot submit queue");
+
+        let present_info = ash::vk::PresentInfoKHR {
+            s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
+            p_next: std::ptr::null(),
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
+            swapchain_count: 1,
+            p_swapchains: &swapchain,
+            p_image_indices: &infos_of_acquired_image.0,
+            p_results: std::ptr::null_mut(),
+        };
+        swapchain_loader
+            .queue_present(queue, &present_info)
+            .expect("Cannot present image");
+
+        current_frame = (current_frame + 1) % FRAME_COUNT;
+        // }
     }
 }
