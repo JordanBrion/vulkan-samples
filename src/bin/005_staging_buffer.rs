@@ -1,6 +1,6 @@
 extern crate ash;
 extern crate core;
-extern crate glm;
+extern crate nalgebra_glm as glm;
 extern crate num;
 extern crate sdl2;
 
@@ -20,8 +20,8 @@ use ash::vk::Handle;
 
 #[repr(C)]
 struct MyPointData {
-    position: glm::Vector3<f32>,
-    color: glm::Vector3<f32>,
+    position: glm::Vec3,
+    color: glm::Vec3,
 }
 
 unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::Instance {
@@ -324,7 +324,7 @@ fn main() {
                 location: 2,
                 binding: 0,
                 format: ash::vk::Format::R32G32B32_SFLOAT,
-                offset: std::mem::size_of::<glm::Vector3<f32>>() as u32,
+                offset: std::mem::size_of::<glm::Vec3>() as u32,
             },
         ];
 
@@ -628,40 +628,16 @@ fn main() {
 
         let vertex_buffer_content = vec![
             MyPointData {
-                position: glm::Vector3 {
-                    x: 0f32,
-                    y: 0.5f32,
-                    z: 0f32,
-                },
-                color: glm::Vector3 {
-                    x: 1.0f32,
-                    y: 0.0f32,
-                    z: 0.0f32,
-                },
+                position: glm::vec3(0f32, 0.5f32, 0f32),
+                color: glm::vec3(1.0f32, 0.0f32, 0.0f32),
             },
             MyPointData {
-                position: glm::Vector3 {
-                    x: 0.5f32,
-                    y: -0.5f32,
-                    z: 0f32,
-                },
-                color: glm::Vector3 {
-                    x: 0f32,
-                    y: 1.0f32,
-                    z: 0f32,
-                },
+                position: glm::vec3(0.5f32, -0.5f32, 0f32),
+                color: glm::vec3(0f32, 1.0f32, 0f32)
             },
-            MyPointData {
-                position: glm::Vector3 {
-                    x: -0.5f32,
-                    y: -0.5f32,
-                    z: 0f32,
-                },
-                color: glm::Vector3 {
-                    x: 0f32,
-                    y: 0f32,
-                    z: 1.0f32,
-                },
+             MyPointData {
+                position: glm::vec3(-0.5f32, -0.5f32, 0f32),
+                color: glm::vec3(0f32, 0f32, 1.0f32)
             },
         ];
 

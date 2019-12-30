@@ -7,4 +7,4 @@ authors = ["jordanbrion"]
 ash = "0.29.0"
 sdl2 = "0.32.2"
 num = "0.2.0"
-glm = "0.2.3"
+nalgebra-glm = "0.5.0"
