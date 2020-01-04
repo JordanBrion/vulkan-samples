@@ -2,7 +2,7 @@ extern crate ash;
 extern crate core;
 extern crate nalgebra_glm as glm;
 extern crate num;
-extern crate png;
+extern crate jpeg_decoder as jpeg;
 extern crate sdl2;
 
 use sdl2::event::Event;
@@ -23,6 +23,7 @@ use ash::vk::Handle;
 struct MyPointData {
     position: glm::Vec3,
     color: glm::Vec3,
+    uv: glm::Vec2,
 }
 
 #[repr(C)]
@@ -104,6 +105,9 @@ unsafe fn create_logical_device(
     let mut v_extensions = Vec::new();
     v_extensions.push(ash::extensions::khr::Swapchain::name());
     let v_extensions_c = v_extensions.iter().map(|e| e.as_ptr() as *const i8);
+
+    let physical_device_features = ash::vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true).build();
+
     let device_create_info = ash::vk::DeviceCreateInfo {
         s_type: ash::vk::StructureType::DEVICE_CREATE_INFO,
         p_next: std::ptr::null(),
@@ -114,7 +118,7 @@ unsafe fn create_logical_device(
         pp_enabled_layer_names: std::ptr::null(),
         enabled_extension_count: v_extensions_c.len() as u32,
         pp_enabled_extension_names: v_extensions.as_ptr() as *const *const i8,
-        p_enabled_features: std::ptr::null(),
+        p_enabled_features: &physical_device_features,
     };
     instance.create_device(*gpu, &device_create_info, None)
 }
@@ -211,6 +215,177 @@ unsafe fn update_uniform_buffer(
     logical_device.unmap_memory(*memory);
 }
 
+unsafe fn change_image_layout(
+    logical_device: &ash::Device,
+    command_pool: &ash::vk::CommandPool,
+    image: &ash::vk::Image,
+    src_access: ash::vk::AccessFlags,
+    dst_access: ash::vk::AccessFlags,
+    src_pipeline_stage: ash::vk::PipelineStageFlags,
+    dst_pipeline_stage: ash::vk::PipelineStageFlags,
+    old_layout: ash::vk::ImageLayout,
+    new_layout: ash::vk::ImageLayout,
+    queue: &ash::vk::Queue,
+) {
+    let command_buffer_allocate_info = ash::vk::CommandBufferAllocateInfo {
+        s_type: ash::vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+        p_next: std::ptr::null(),
+        command_pool: *command_pool,
+        level: ash::vk::CommandBufferLevel::PRIMARY,
+        command_buffer_count: 1,
+    };
+    let command_buffer = logical_device
+        .allocate_command_buffers(&command_buffer_allocate_info)
+        .expect("Cannot allocate command buffers to change image layout")[0];
+    let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
+        s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+        p_next: std::ptr::null(),
+        flags: Default::default(),
+        p_inheritance_info: std::ptr::null(),
+    };
+    logical_device
+        .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+        .expect("Cannot begin command buffer to change image layout");
+    let image_resource_range = ash::vk::ImageSubresourceRange {
+        aspect_mask: ash::vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let image_memory_barrier = ash::vk::ImageMemoryBarrier {
+        s_type: ash::vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: std::ptr::null(),
+        src_access_mask: src_access,
+        dst_access_mask: dst_access,
+        old_layout: old_layout,
+        new_layout: new_layout,
+        src_queue_family_index: ash::vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: ash::vk::QUEUE_FAMILY_IGNORED,
+        image: *image,
+        subresource_range: image_resource_range,
+    };
+    logical_device.cmd_pipeline_barrier(
+        command_buffer,
+        src_pipeline_stage,
+        dst_pipeline_stage,
+        Default::default(),
+        &[],
+        &[],
+        &[image_memory_barrier],
+    );
+    logical_device
+        .end_command_buffer(command_buffer)
+        .expect("Cannot end command buffer to change image layout");
+    let submit_info = ash::vk::SubmitInfo {
+        s_type: ash::vk::StructureType::SUBMIT_INFO,
+        p_next: std::ptr::null(),
+        wait_semaphore_count: 0,
+        p_wait_semaphores: std::ptr::null(),
+        p_wait_dst_stage_mask: std::ptr::null(),
+        command_buffer_count: 1,
+        p_command_buffers: &command_buffer,
+        signal_semaphore_count: 0,
+        p_signal_semaphores: std::ptr::null(),
+    };
+    logical_device
+        .queue_submit(*queue, &[submit_info], ash::vk::Fence::null())
+        .expect("Cannot submit command to change image layout");
+    logical_device
+        .queue_wait_idle(*queue)
+        .expect("Cannot wait for queue to change image layout");
+    logical_device.free_command_buffers(*command_pool, &[command_buffer]);
+}
+
+unsafe fn copy_buffer_to_image(
+    logical_device: &ash::Device,
+    command_pool: &ash::vk::CommandPool,
+    src_buffer: &ash::vk::Buffer,
+    dst_image: &ash::vk::Image,
+    image_layout: ash::vk::ImageLayout,
+    image_width: u32,
+    image_height: u32,
+    queue: &ash::vk::Queue,
+) {
+    let command_buffer_copy_image_allocate_info = ash::vk::CommandBufferAllocateInfo {
+        s_type: ash::vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+        p_next: std::ptr::null(),
+        command_pool: *command_pool,
+        level: ash::vk::CommandBufferLevel::PRIMARY,
+        command_buffer_count: 1,
+    };
+    let command_buffer_copy_image = logical_device
+        .allocate_command_buffers(&command_buffer_copy_image_allocate_info)
+        .expect("Cannot allocate command buffer to copy texture image")[0];
+
+    let command_buffer_copy_image_begin_info = ash::vk::CommandBufferBeginInfo {
+        s_type: ash::vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+        p_next: std::ptr::null(),
+        flags: ash::vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        p_inheritance_info: std::ptr::null(),
+    };
+    logical_device
+        .begin_command_buffer(
+            command_buffer_copy_image,
+            &command_buffer_copy_image_begin_info,
+        )
+        .expect("Cannot begin command buffer to copy texture buffer to image");
+    let buffer_image_copy_region = ash::vk::BufferImageCopy {
+        buffer_offset: 0,
+        buffer_row_length: 0,
+        buffer_image_height: 0,
+        image_subresource: ash::vk::ImageSubresourceLayers {
+            aspect_mask: ash::vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        },
+        image_offset: ash::vk::Offset3D { x: 0, y: 0, z: 0 },
+        image_extent: ash::vk::Extent3D {
+            width: image_width,
+            height: image_height,
+            depth: 1,
+        },
+    };
+
+    println!("hello copy width {}", image_width);
+    println!("hello copy height {}", image_height);
+
+    logical_device.cmd_copy_buffer_to_image(
+        command_buffer_copy_image,
+        *src_buffer,
+        *dst_image,
+        image_layout,
+        &[buffer_image_copy_region],
+    );
+
+    logical_device
+        .end_command_buffer(command_buffer_copy_image)
+        .expect("Cannot end command buffer to copy texture buffer to image");
+
+    let submit_info = ash::vk::SubmitInfo {
+        s_type: ash::vk::StructureType::SUBMIT_INFO,
+        p_next: std::ptr::null(),
+        wait_semaphore_count: 0,
+        p_wait_semaphores: std::ptr::null(),
+        p_wait_dst_stage_mask: std::ptr::null(),
+        command_buffer_count: 1,
+        p_command_buffers: &command_buffer_copy_image,
+        signal_semaphore_count: 0,
+        p_signal_semaphores: std::ptr::null(),
+    };
+
+    logical_device
+        .queue_submit(*queue, &[submit_info], ash::vk::Fence::null())
+        .expect("Cannot submit command to change image layout");
+
+    logical_device
+        .queue_wait_idle(*queue)
+        .expect("Cannot wait for queue to change image layout");
+        
+    logical_device.free_command_buffers(*command_pool, &[command_buffer_copy_image]);
+}
+
 const FRAME_COUNT: usize = 2;
 fn main() {
     unsafe {
@@ -296,7 +471,7 @@ fn main() {
         let swapchain_create_info = ash::vk::SwapchainCreateInfoKHR {
             s_type: ash::vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
             p_next: std::ptr::null(),
-            flags: Default::default(), //ash::vk::SwapchainCreateFlagsKHR::SPLIT_INSTANCE_BIND_REGIONS,
+            flags: Default::default(),
             surface: surface,
             min_image_count: image_count,
             image_format: available_format.format,
@@ -343,7 +518,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/006_spinning_triangle.vert.spv"),
+                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/007_textured_triangle.vert.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -352,7 +527,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::FRAGMENT,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/006_spinning_triangle.frag.spv"),
+                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/007_textured_triangle.frag.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -376,6 +551,13 @@ fn main() {
                 binding: 0,
                 format: ash::vk::Format::R32G32B32_SFLOAT,
                 offset: std::mem::size_of::<glm::Vec3>() as u32,
+            },
+            ash::vk::VertexInputAttributeDescription {
+                location: 3,
+                binding: 0,
+                format: ash::vk::Format::R32G32_SFLOAT,
+                offset: (std::mem::size_of::<glm::Vec3>() + std::mem::size_of::<glm::Vec3>())
+                    as u32,
             },
         ];
 
@@ -501,38 +683,54 @@ fn main() {
         };
 
         let uniform_buffer_binding_number = 5;
-        let descriptor_set_layout_binding = ash::vk::DescriptorSetLayoutBinding {
-            binding: uniform_buffer_binding_number,
-            descriptor_type: ash::vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 1,
-            stage_flags: ash::vk::ShaderStageFlags::VERTEX,
-            p_immutable_samplers: std::ptr::null(),
-        };
+        let texture_image_binding_number = 10;
+        let v_descriptor_set_layout_binding = &[
+            ash::vk::DescriptorSetLayoutBinding {
+                binding: uniform_buffer_binding_number,
+                descriptor_type: ash::vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1,
+                stage_flags: ash::vk::ShaderStageFlags::VERTEX,
+                p_immutable_samplers: std::ptr::null(),
+            },
+            ash::vk::DescriptorSetLayoutBinding {
+                binding: texture_image_binding_number,
+                descriptor_type: ash::vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1,
+                stage_flags: ash::vk::ShaderStageFlags::FRAGMENT,
+                p_immutable_samplers: std::ptr::null(),
+            },
+        ];
 
         let descriptor_set_layout_create_info = ash::vk::DescriptorSetLayoutCreateInfo {
             s_type: ash::vk::StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: Default::default(),
-            binding_count: 1,
-            p_bindings: &descriptor_set_layout_binding,
+            binding_count: v_descriptor_set_layout_binding.len() as u32,
+            p_bindings: v_descriptor_set_layout_binding.as_ptr(),
         };
 
         let descriptor_set_layout = logical_device
             .create_descriptor_set_layout(&descriptor_set_layout_create_info, None)
             .expect("Cannot create descriptor set layout");
 
-        let descriptor_pool_size = ash::vk::DescriptorPoolSize {
-            ty: ash::vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: swapchain_size as u32,
-        };
+        let v_descriptor_pool_size = &[
+            ash::vk::DescriptorPoolSize {
+                ty: ash::vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: swapchain_size as u32,
+            },
+            ash::vk::DescriptorPoolSize {
+                ty: ash::vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: swapchain_size as u32,
+            },
+        ];
 
         let descriptor_pool_create_info = ash::vk::DescriptorPoolCreateInfo {
             s_type: ash::vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: ash::vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET,
             max_sets: swapchain_size as u32,
-            pool_size_count: 1,
-            p_pool_sizes: &descriptor_pool_size,
+            pool_size_count: v_descriptor_pool_size.len() as u32,
+            p_pool_sizes: v_descriptor_pool_size.as_ptr(),
         };
         let descriptor_pool = logical_device
             .create_descriptor_pool(&descriptor_pool_create_info, None)
@@ -691,34 +889,25 @@ fn main() {
             .create_command_pool(&command_pool_create_info, None)
             .expect("Cannot create command pool");
 
-        let command_buffer_allocate_info = ash::vk::CommandBufferAllocateInfo {
-            s_type: ash::vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
-            p_next: std::ptr::null(),
-            command_pool: command_pool,
-            level: ash::vk::CommandBufferLevel::PRIMARY,
-            command_buffer_count: swapchain_size as u32,
-        };
-
-        let v_command_buffers = logical_device
-            .allocate_command_buffers(&command_buffer_allocate_info)
-            .expect("Cannot allocate command buffer");
-
-        let vertex_buffer_bytes_size = std::mem::size_of::<MyPointData>() * 3;
-
         let vertex_buffer_content = vec![
             MyPointData {
-                position: glm::vec3(0f32, 0.5f32, 0f32),
-                color: glm::vec3(1.0f32, 0.0f32, 0.0f32),
+                position: glm::vec3(0.0, 0.0, 0.0),
+                color: glm::vec3(1.0, 0.0, 0.0),
+                uv: glm::vec2(0.0, 0.0),
             },
             MyPointData {
-                position: glm::vec3(0.5f32, -0.5f32, 0f32),
-                color: glm::vec3(0f32, 1.0f32, 0f32),
+                position: glm::vec3(0.0, 1.0, 0.0),
+                color: glm::vec3(0.0, 1.0, 0.0),
+                uv: glm::vec2(0.0, 1.0),
             },
             MyPointData {
-                position: glm::vec3(-0.5f32, -0.5f32, 0f32),
-                color: glm::vec3(0f32, 0f32, 1.0f32),
+                position: glm::vec3(1.0, 0.0, 0.0),
+                color: glm::vec3(0.0, 0.0, 1.0),
+                uv: glm::vec2(1.0, 0.0),
             },
         ];
+
+        let vertex_buffer_bytes_size = std::mem::size_of::<MyPointData>() * vertex_buffer_content.len();
 
         // VERTEX ATTRIBUTES: STAGING BUFFER CREATION
         let staging_buffer_create_info = ash::vk::BufferCreateInfo {
@@ -884,23 +1073,23 @@ fn main() {
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
         // TEXTURE: staging buffer creation
-        let decoder = png::Decoder::new(
-            std::fs::File::open(
-                "/home/jordanbrion/Documents/3dassets/VariedStoneBlockMasonryMossy_basecolor.png",
-            )
-            .expect("Cannot open texture file"),
-        );
-        let (info, mut reader) = decoder.read_info().unwrap();
-        let mut texture_data = vec![0; info.buffer_size()];
-        reader
-            .next_frame(&mut texture_data)
-            .expect("Cannot read texture data");
+        let jpg_file = std::fs::File::open("/home/jordanbrion/Downloads/texture.jpg").expect("failed to open .jpg texture");
+        let mut decoder = jpeg::Decoder::new(std::io::BufReader::new(jpg_file));
+        let raw_texture_data = decoder.decode().expect("failed to decode jpg texture");
+        let jpg_metadata = decoder.info().unwrap();
+        let texture_bytes_count = jpg_metadata.width as usize * jpg_metadata.height as usize * 4;
+        let mut texture_data = vec![0; texture_bytes_count];
+        for i in (0..raw_texture_data.len()).step_by(4) {
+            texture_data[i] = raw_texture_data[i];
+            texture_data[i+1] = raw_texture_data[i+1];
+            texture_data[i+2] = raw_texture_data[i+2];
+        }
 
         let texture_staging_buffer_create_info = ash::vk::BufferCreateInfo {
             s_type: ash::vk::StructureType::BUFFER_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: Default::default(),
-            size: texture_data.len() as ash::vk::DeviceSize,
+            size: texture_bytes_count as ash::vk::DeviceSize,
             usage: ash::vk::BufferUsageFlags::TRANSFER_SRC,
             sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
             queue_family_index_count: 0,
@@ -913,6 +1102,12 @@ fn main() {
 
         let texture_staging_buffer_requirements =
             logical_device.get_buffer_memory_requirements(texture_staging_buffer);
+
+            println!("image width {}", jpg_metadata.width);
+            println!("image height {}", jpg_metadata.height);
+            println!("image vec {}", texture_data.len());
+            println!("image bytes {}", texture_bytes_count);    
+        println!("buffer requirement size {}", texture_staging_buffer_requirements.size);
 
         let texture_memory_staging_buffer_allocate_info = ash::vk::MemoryAllocateInfo {
             s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
@@ -954,6 +1149,144 @@ fn main() {
         logical_device.unmap_memory(texture_memory_staging_buffer);
 
         // TEXTURE: image creation
+        let texture_extent = ash::vk::Extent3D {
+            width: jpg_metadata.width as u32,
+            height: jpg_metadata.height as u32,
+            depth: 1,
+        };
+        let texture_image_create_info = ash::vk::ImageCreateInfo {
+            s_type: ash::vk::StructureType::IMAGE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            image_type: ash::vk::ImageType::TYPE_2D,
+            format: ash::vk::Format::R8G8B8A8_UNORM,
+            extent: texture_extent,
+            mip_levels: 1,
+            array_layers: 1,
+            samples: ash::vk::SampleCountFlags::TYPE_1,
+            tiling: ash::vk::ImageTiling::OPTIMAL,
+            usage: ash::vk::ImageUsageFlags::TRANSFER_DST | ash::vk::ImageUsageFlags::SAMPLED,
+            sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: std::ptr::null(),
+            initial_layout: ash::vk::ImageLayout::UNDEFINED,
+        };
+
+        let texture_image = logical_device
+            .create_image(&texture_image_create_info, None)
+            .expect("Cannot create texture image");
+        let texture_image_memory_requirements =
+            logical_device.get_image_memory_requirements(texture_image);
+        let texture_image_memory_allocate_info = ash::vk::MemoryAllocateInfo {
+            s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            allocation_size: texture_image_memory_requirements.size,
+            memory_type_index: search_physical_device_memory_type(
+                &instance,
+                &gpu,
+                &texture_image_memory_requirements,
+                ash::vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .expect("Cannot get memory type for texture image")
+                as u32,
+        };
+        let texture_image_memory = logical_device
+            .allocate_memory(&texture_image_memory_allocate_info, None)
+            .expect("Cannot allocate texture image memory");
+
+        logical_device
+            .bind_image_memory(texture_image, texture_image_memory, 0)
+            .expect("Cannot bind image texture to its memory");
+
+        println!("texture image requiremenet size {}", texture_image_memory_requirements.size);
+
+        change_image_layout(
+            &logical_device,
+            &command_pool,
+            &texture_image,
+            ash::vk::AccessFlags::empty(),
+            ash::vk::AccessFlags::TRANSFER_WRITE,
+            ash::vk::PipelineStageFlags::TOP_OF_PIPE,
+            ash::vk::PipelineStageFlags::TRANSFER,
+            ash::vk::ImageLayout::UNDEFINED,
+            ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &queue,
+        );
+
+        copy_buffer_to_image(
+            &logical_device,
+            &command_pool,
+            &texture_staging_buffer,
+            &texture_image,
+            ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            jpg_metadata.width as u32,
+            jpg_metadata.height as u32,
+            &queue,
+        );
+
+        change_image_layout(
+            &logical_device,
+            &command_pool,
+            &texture_image,
+            ash::vk::AccessFlags::TRANSFER_WRITE,
+            ash::vk::AccessFlags::SHADER_READ,
+            ash::vk::PipelineStageFlags::TRANSFER,
+            ash::vk::PipelineStageFlags::FRAGMENT_SHADER,
+            ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            &queue,
+        );
+
+        let texture_view_components = ash::vk::ComponentMapping {
+            r: ash::vk::ComponentSwizzle::IDENTITY,
+            g: ash::vk::ComponentSwizzle::IDENTITY,
+            b: ash::vk::ComponentSwizzle::IDENTITY,
+            a: ash::vk::ComponentSwizzle::IDENTITY,
+        };
+        let texture_view_range = ash::vk::ImageSubresourceRange {
+            aspect_mask: ash::vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let texture_image_view_create_info = ash::vk::ImageViewCreateInfo {
+            s_type: ash::vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            image: texture_image,
+            view_type: ash::vk::ImageViewType::TYPE_2D,
+            format: texture_image_create_info.format,
+            components: texture_view_components,
+            subresource_range: texture_view_range,
+        };
+        let texture_image_view = logical_device
+            .create_image_view(&texture_image_view_create_info, None)
+            .expect("Cannot create image texture view");
+
+        let texture_sampler_create_info = ash::vk::SamplerCreateInfo {
+            s_type: ash::vk::StructureType::SAMPLER_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: Default::default(),
+            mag_filter: ash::vk::Filter::LINEAR,
+            min_filter: ash::vk::Filter::LINEAR,
+            mipmap_mode: ash::vk::SamplerMipmapMode::LINEAR,
+            address_mode_u: ash::vk::SamplerAddressMode::REPEAT,
+            address_mode_v: ash::vk::SamplerAddressMode::REPEAT,
+            address_mode_w: ash::vk::SamplerAddressMode::REPEAT,
+            mip_lod_bias: 0.0,
+            anisotropy_enable: ash::vk::FALSE,
+            max_anisotropy: 0.0,
+            compare_enable: ash::vk::FALSE,
+            compare_op: ash::vk::CompareOp::NEVER,
+            min_lod: 0.0,
+            max_lod: 0.0,
+            border_color: ash::vk::BorderColor::INT_OPAQUE_BLACK,
+            unnormalized_coordinates: 0,
+        };
+        let texture_image_sampler = logical_device
+            .create_sampler(&texture_sampler_create_info, None)
+            .expect("Cannot create image texture sampler");
 
         // UNIFORM BUFFERS
         let mut matrices = MyUniformBuffer {
@@ -1016,20 +1349,52 @@ fn main() {
                 offset: 0,
                 range: ash::vk::WHOLE_SIZE,
             };
-            let descriptor_write = ash::vk::WriteDescriptorSet {
-                s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
-                p_next: std::ptr::null(),
-                dst_set: v_descriptor_sets[i],
-                dst_binding: uniform_buffer_binding_number,
-                dst_array_element: 0,
-                descriptor_count: 1,
-                descriptor_type: ash::vk::DescriptorType::UNIFORM_BUFFER,
-                p_image_info: std::ptr::null(),
-                p_buffer_info: &descriptor_buffer_info,
-                p_texel_buffer_view: std::ptr::null(),
+            let descriptor_image_info = ash::vk::DescriptorImageInfo {
+                sampler: texture_image_sampler,
+                image_view: texture_image_view,
+                image_layout: ash::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             };
-            logical_device.update_descriptor_sets(&[descriptor_write], &[]);
+
+            let v_descriptor_writes = &[
+                ash::vk::WriteDescriptorSet {
+                    s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
+                    p_next: std::ptr::null(),
+                    dst_set: v_descriptor_sets[i],
+                    dst_binding: uniform_buffer_binding_number,
+                    dst_array_element: 0,
+                    descriptor_count: 1,
+                    descriptor_type: ash::vk::DescriptorType::UNIFORM_BUFFER,
+                    p_image_info: std::ptr::null(),
+                    p_buffer_info: &descriptor_buffer_info,
+                    p_texel_buffer_view: std::ptr::null(),
+                 },
+                ash::vk::WriteDescriptorSet {
+                    s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
+                    p_next: std::ptr::null(),
+                    dst_set: v_descriptor_sets[i],
+                    dst_binding: texture_image_binding_number,
+                    dst_array_element: 0,
+                    descriptor_count: 1,
+                    descriptor_type: ash::vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    p_image_info: &descriptor_image_info,
+                    p_buffer_info: std::ptr::null(),
+                    p_texel_buffer_view: std::ptr::null(),
+                },
+            ];
+            logical_device.update_descriptor_sets(v_descriptor_writes, &[]);
         }
+
+        let command_buffer_allocate_info = ash::vk::CommandBufferAllocateInfo {
+            s_type: ash::vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            command_pool: command_pool,
+            level: ash::vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: swapchain_size as u32,
+        };
+
+        let v_command_buffers = logical_device
+            .allocate_command_buffers(&command_buffer_allocate_info)
+            .expect("Cannot allocate command buffer");
 
         for (index, command_buffer) in (&v_command_buffers).iter().enumerate() {
             let render_area = ash::vk::Rect2D {
@@ -1067,6 +1432,13 @@ fn main() {
                 &render_pass_begin_info,
                 ash::vk::SubpassContents::INLINE,
             );
+
+            logical_device.cmd_bind_pipeline(
+                *command_buffer,
+                ash::vk::PipelineBindPoint::GRAPHICS,
+                graphics_pipeline,
+            );
+
             logical_device.cmd_bind_descriptor_sets(
                 *command_buffer,
                 ash::vk::PipelineBindPoint::GRAPHICS,
@@ -1075,11 +1447,7 @@ fn main() {
                 &[v_descriptor_sets[index]],
                 &[],
             );
-            logical_device.cmd_bind_pipeline(
-                *command_buffer,
-                ash::vk::PipelineBindPoint::GRAPHICS,
-                graphics_pipeline,
-            );
+
             logical_device.cmd_bind_vertex_buffers(
                 *command_buffer,
                 0,
@@ -1140,71 +1508,72 @@ fn main() {
         let mut go = true;
         let mut current_frame = 0;
 
-        // while go {
-        go = handle_events(&mut event_pump);
+        while go {
+            go = handle_events(&mut event_pump);
 
-        logical_device
-            .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
-            .expect("Cannot wait for fences");
-
-        let infos_of_acquired_image = swapchain_loader
-            .acquire_next_image(
-                swapchain,
-                !(0 as u64),
-                v_semaphores_acquired_image[current_frame],
-                ash::vk::Fence::null(),
-            )
-            .expect("Cannot acquire next image");
-
-        let index_of_acquired_image = infos_of_acquired_image.0 as usize;
-
-        if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
             logical_device
-                .wait_for_fences(
-                    &[v_fences_ref_wait_gpu[index_of_acquired_image]],
-                    true,
-                    !(0 as u64),
-                )
+                .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
                 .expect("Cannot wait for fences");
+
+            let infos_of_acquired_image = swapchain_loader
+                .acquire_next_image(
+                    swapchain,
+                    !(0 as u64),
+                    v_semaphores_acquired_image[current_frame],
+                    ash::vk::Fence::null(),
+                )
+                .expect("Cannot acquire next image");
+
+            let index_of_acquired_image = infos_of_acquired_image.0 as usize;
+
+            if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
+                logical_device
+                    .wait_for_fences(
+                        &[v_fences_ref_wait_gpu[index_of_acquired_image]],
+                        true,
+                        !(0 as u64),
+                    )
+                    .expect("Cannot wait for fences");
+            }
+
+            v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
+
+            logical_device
+                .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
+                .expect("Cannot reset fences");
+
+            let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+            let submit_info = ash::vk::SubmitInfo {
+                s_type: ash::vk::StructureType::SUBMIT_INFO,
+                p_next: std::ptr::null(),
+                wait_semaphore_count: 1,
+                p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
+                p_wait_dst_stage_mask: &wait_stage_submit_info
+                    as *const ash::vk::PipelineStageFlags,
+                command_buffer_count: 1,
+                p_command_buffers: &v_command_buffers[index_of_acquired_image],
+                signal_semaphore_count: 1,
+                p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
+            };
+            logical_device
+                .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
+                .expect("Cannot submit queue");
+
+            let present_info = ash::vk::PresentInfoKHR {
+                s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
+                p_next: std::ptr::null(),
+                wait_semaphore_count: 1,
+                p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
+                swapchain_count: 1,
+                p_swapchains: &swapchain,
+                p_image_indices: &infos_of_acquired_image.0,
+                p_results: std::ptr::null_mut(),
+            };
+            swapchain_loader
+                .queue_present(queue, &present_info)
+                .expect("Cannot present image");
+
+            current_frame = (current_frame + 1) % FRAME_COUNT;
         }
-
-        v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
-
-        logical_device
-            .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
-            .expect("Cannot reset fences");
-
-        let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
-        let submit_info = ash::vk::SubmitInfo {
-            s_type: ash::vk::StructureType::SUBMIT_INFO,
-            p_next: std::ptr::null(),
-            wait_semaphore_count: 1,
-            p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
-            p_wait_dst_stage_mask: &wait_stage_submit_info as *const ash::vk::PipelineStageFlags,
-            command_buffer_count: 1,
-            p_command_buffers: &v_command_buffers[index_of_acquired_image],
-            signal_semaphore_count: 1,
-            p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
-        };
-        logical_device
-            .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
-            .expect("Cannot submit queue");
-
-        let present_info = ash::vk::PresentInfoKHR {
-            s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
-            p_next: std::ptr::null(),
-            wait_semaphore_count: 1,
-            p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
-            swapchain_count: 1,
-            p_swapchains: &swapchain,
-            p_image_indices: &infos_of_acquired_image.0,
-            p_results: std::ptr::null_mut(),
-        };
-        swapchain_loader
-            .queue_present(queue, &present_info)
-            .expect("Cannot present image");
-
-        current_frame = (current_frame + 1) % FRAME_COUNT;
-        // }
     }
 }
