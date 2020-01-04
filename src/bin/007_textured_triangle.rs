@@ -1076,7 +1076,7 @@ fn main() {
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
         // TEXTURE: staging buffer creation
-        let jpg_file = std::fs::File::open("/home/jordanbrion/Downloads/texture.jpg")
+        let jpg_file = std::fs::File::open("/home/jordanbrion/Documents/rust/vulkan-samples/textures/texture.jpg")
             .expect("failed to open .jpg texture");
         let mut decoder = jpeg::Decoder::new(std::io::BufReader::new(jpg_file));
         let raw_texture_data = decoder.decode().expect("failed to decode jpg texture");
