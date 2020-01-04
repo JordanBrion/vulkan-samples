@@ -1,8 +1,9 @@
 extern crate ash;
 extern crate core;
+extern crate jpeg_decoder as jpeg;
 extern crate nalgebra_glm as glm;
 extern crate num;
-extern crate jpeg_decoder as jpeg;
+extern crate png;
 extern crate sdl2;
 
 use sdl2::event::Event;
@@ -106,7 +107,9 @@ unsafe fn create_logical_device(
     v_extensions.push(ash::extensions::khr::Swapchain::name());
     let v_extensions_c = v_extensions.iter().map(|e| e.as_ptr() as *const i8);
 
-    let physical_device_features = ash::vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true).build();
+    let physical_device_features = ash::vk::PhysicalDeviceFeatures::builder()
+        .sampler_anisotropy(true)
+        .build();
 
     let device_create_info = ash::vk::DeviceCreateInfo {
         s_type: ash::vk::StructureType::DEVICE_CREATE_INFO,
@@ -382,7 +385,6 @@ unsafe fn copy_buffer_to_image(
     logical_device
         .queue_wait_idle(*queue)
         .expect("Cannot wait for queue to change image layout");
-        
     logical_device.free_command_buffers(*command_pool, &[command_buffer_copy_image]);
 }
 
@@ -907,7 +909,8 @@ fn main() {
             },
         ];
 
-        let vertex_buffer_bytes_size = std::mem::size_of::<MyPointData>() * vertex_buffer_content.len();
+        let vertex_buffer_bytes_size =
+            std::mem::size_of::<MyPointData>() * vertex_buffer_content.len();
 
         // VERTEX ATTRIBUTES: STAGING BUFFER CREATION
         let staging_buffer_create_info = ash::vk::BufferCreateInfo {
@@ -1073,16 +1076,27 @@ fn main() {
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
         // TEXTURE: staging buffer creation
-        let jpg_file = std::fs::File::open("/home/jordanbrion/Downloads/texture.jpg").expect("failed to open .jpg texture");
+        let jpg_file = std::fs::File::open("/home/jordanbrion/Downloads/texture.jpg")
+            .expect("failed to open .jpg texture");
         let mut decoder = jpeg::Decoder::new(std::io::BufReader::new(jpg_file));
         let raw_texture_data = decoder.decode().expect("failed to decode jpg texture");
         let jpg_metadata = decoder.info().unwrap();
-        let texture_bytes_count = jpg_metadata.width as usize * jpg_metadata.height as usize * 4;
-        let mut texture_data = vec![0; texture_bytes_count];
-        for i in (0..raw_texture_data.len()).step_by(4) {
-            texture_data[i] = raw_texture_data[i];
-            texture_data[i+1] = raw_texture_data[i+1];
-            texture_data[i+2] = raw_texture_data[i+2];
+        let texture_pixel_width = jpg_metadata.width as usize;
+        let texture_pixel_height = jpg_metadata.height as usize;
+        let one_texture_pixel_bytes_size = 4;
+        let texture_bytes_count =
+            texture_pixel_width * one_texture_pixel_bytes_size * texture_pixel_height;
+        let mut texture_data = vec![255 as u8; texture_bytes_count];
+
+        for height_idx in 0..texture_pixel_height {
+            for width_idx in 0..texture_pixel_width {
+                let src_idx = height_idx * (texture_pixel_width * 3) + (width_idx * 3);
+                let dst_idx = height_idx * (texture_pixel_width * 4) + (width_idx * 4);
+                texture_data[dst_idx] = raw_texture_data[src_idx];
+                texture_data[dst_idx + 1] = raw_texture_data[src_idx + 1];
+                texture_data[dst_idx + 2] = raw_texture_data[src_idx + 2];
+                texture_data[dst_idx + 3] = 255;
+            }
         }
 
         let texture_staging_buffer_create_info = ash::vk::BufferCreateInfo {
@@ -1103,11 +1117,15 @@ fn main() {
         let texture_staging_buffer_requirements =
             logical_device.get_buffer_memory_requirements(texture_staging_buffer);
 
-            println!("image width {}", jpg_metadata.width);
-            println!("image height {}", jpg_metadata.height);
-            println!("image vec {}", texture_data.len());
-            println!("image bytes {}", texture_bytes_count);    
-        println!("buffer requirement size {}", texture_staging_buffer_requirements.size);
+        println!("image width {}", texture_pixel_width);
+        println!("image height {}", texture_pixel_height);
+        // println!("image raw vec {}", raw_texture_data.len());
+        println!("image vec {}", texture_data.len());
+        println!("image bytes {}", texture_bytes_count);
+        println!(
+            "buffer requirement size {}",
+            texture_staging_buffer_requirements.size
+        );
 
         let texture_memory_staging_buffer_allocate_info = ash::vk::MemoryAllocateInfo {
             s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
@@ -1150,8 +1168,8 @@ fn main() {
 
         // TEXTURE: image creation
         let texture_extent = ash::vk::Extent3D {
-            width: jpg_metadata.width as u32,
-            height: jpg_metadata.height as u32,
+            width: texture_pixel_width as u32,
+            height: texture_pixel_height as u32,
             depth: 1,
         };
         let texture_image_create_info = ash::vk::ImageCreateInfo {
@@ -1198,7 +1216,10 @@ fn main() {
             .bind_image_memory(texture_image, texture_image_memory, 0)
             .expect("Cannot bind image texture to its memory");
 
-        println!("texture image requiremenet size {}", texture_image_memory_requirements.size);
+        println!(
+            "texture image requiremenet size {}",
+            texture_image_memory_requirements.size
+        );
 
         change_image_layout(
             &logical_device,
@@ -1219,8 +1240,8 @@ fn main() {
             &texture_staging_buffer,
             &texture_image,
             ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            jpg_metadata.width as u32,
-            jpg_metadata.height as u32,
+            texture_pixel_width as u32,
+            texture_pixel_height as u32,
             &queue,
         );
 
@@ -1256,7 +1277,7 @@ fn main() {
             flags: Default::default(),
             image: texture_image,
             view_type: ash::vk::ImageViewType::TYPE_2D,
-            format: texture_image_create_info.format,
+            format: ash::vk::Format::R8G8B8A8_UNORM,
             components: texture_view_components,
             subresource_range: texture_view_range,
         };
@@ -1275,10 +1296,10 @@ fn main() {
             address_mode_v: ash::vk::SamplerAddressMode::REPEAT,
             address_mode_w: ash::vk::SamplerAddressMode::REPEAT,
             mip_lod_bias: 0.0,
-            anisotropy_enable: ash::vk::FALSE,
-            max_anisotropy: 0.0,
+            anisotropy_enable: ash::vk::TRUE,
+            max_anisotropy: 16.0,
             compare_enable: ash::vk::FALSE,
-            compare_op: ash::vk::CompareOp::NEVER,
+            compare_op: ash::vk::CompareOp::ALWAYS,
             min_lod: 0.0,
             max_lod: 0.0,
             border_color: ash::vk::BorderColor::INT_OPAQUE_BLACK,
@@ -1367,7 +1388,7 @@ fn main() {
                     p_image_info: std::ptr::null(),
                     p_buffer_info: &descriptor_buffer_info,
                     p_texel_buffer_view: std::ptr::null(),
-                 },
+                },
                 ash::vk::WriteDescriptorSet {
                     s_type: ash::vk::StructureType::WRITE_DESCRIPTOR_SET,
                     p_next: std::ptr::null(),
