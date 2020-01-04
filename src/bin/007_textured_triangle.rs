@@ -351,9 +351,6 @@ unsafe fn copy_buffer_to_image(
         },
     };
 
-    println!("hello copy width {}", image_width);
-    println!("hello copy height {}", image_height);
-
     logical_device.cmd_copy_buffer_to_image(
         command_buffer_copy_image,
         *src_buffer,
@@ -1116,16 +1113,6 @@ fn main() {
 
         let texture_staging_buffer_requirements =
             logical_device.get_buffer_memory_requirements(texture_staging_buffer);
-
-        println!("image width {}", texture_pixel_width);
-        println!("image height {}", texture_pixel_height);
-        // println!("image raw vec {}", raw_texture_data.len());
-        println!("image vec {}", texture_data.len());
-        println!("image bytes {}", texture_bytes_count);
-        println!(
-            "buffer requirement size {}",
-            texture_staging_buffer_requirements.size
-        );
 
         let texture_memory_staging_buffer_allocate_info = ash::vk::MemoryAllocateInfo {
             s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
