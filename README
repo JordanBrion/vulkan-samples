@@ -1,0 +1,7 @@
+This repo contains very simple sample projects to manipulate Vulkan API (via ash crate) in Rust.
+
+You will need the Vulkan SDK from LunarG (https://www.lunarg.com/vulkan-sdk/) and SDL2.
+
+The samples were only tested on Debian 9.11.
+
+NB: the source code is clearly not ready for production use (eg. I do not free Vulkan objects at all)
