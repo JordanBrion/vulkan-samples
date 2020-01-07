@@ -268,7 +268,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/003_swapchain.vert.spv"),
+                        module: create_shader_module(&logical_device, "shaders/003_swapchain.vert.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -278,7 +278,7 @@ fn main() {
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::FRAGMENT,
                         // TODO path
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/003_swapchain.frag.spv"),
+                        module: create_shader_module(&logical_device, "shaders/003_swapchain.frag.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },

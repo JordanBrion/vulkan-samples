@@ -315,7 +315,7 @@ unsafe fn create_compute_pipeline(
     pipeline_layout: vk::PipelineLayout,
 ) -> vk::Pipeline {
     let mut file = std::fs::File::open(
-        "/home/jordanbrion/Documents/rust/vk_001_compute_pipeline/shaders/002_compute_pipeline_2_buffers.comp.spv",
+        "shaders/002_compute_pipeline_2_buffers.comp.spv",
     )
     .expect("Something went wrong opening the shader");
     let spirv_data =

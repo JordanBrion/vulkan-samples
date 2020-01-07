@@ -517,7 +517,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/007_textured_triangle.vert.spv"),
+                        module: create_shader_module(&logical_device, "shaders/007_textured_triangle.vert.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -526,7 +526,7 @@ fn main() {
                         p_next: std::ptr::null(),
                         flags: Default::default(),
                         stage: ash::vk::ShaderStageFlags::FRAGMENT,
-                        module: create_shader_module(&logical_device, "/home/jordanbrion/Documents/rust/vulkan-samples/shaders/007_textured_triangle.frag.spv"),
+                        module: create_shader_module(&logical_device, "shaders/007_textured_triangle.frag.spv"),
                         p_name: shader_entry_name.as_ptr(),
                         p_specialization_info: std::ptr::null(),
                     },
@@ -1073,7 +1073,7 @@ fn main() {
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
         // TEXTURE: staging buffer creation
-        let jpg_file = std::fs::File::open("/home/jordanbrion/Documents/rust/vulkan-samples/textures/texture.jpg")
+        let jpg_file = std::fs::File::open("textures/texture.jpg")
             .expect("failed to open .jpg texture");
         let mut decoder = jpeg::Decoder::new(std::io::BufReader::new(jpg_file));
         let raw_texture_data = decoder.decode().expect("failed to decode jpg texture");
@@ -1202,11 +1202,6 @@ fn main() {
         logical_device
             .bind_image_memory(texture_image, texture_image_memory, 0)
             .expect("Cannot bind image texture to its memory");
-
-        println!(
-            "texture image requiremenet size {}",
-            texture_image_memory_requirements.size
-        );
 
         change_image_layout(
             &logical_device,
