@@ -337,25 +337,31 @@ fn main() {
         let shader_entry_name =
             CString::new("main").expect("Cannot create vertex shader entry name");
         let v_pipeline_shader_stage_create_infos = [
-                    ash::vk::PipelineShaderStageCreateInfo {
-                        s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
-                        p_next: std::ptr::null(),
-                        flags: Default::default(),
-                        stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "shaders/006_spinning_triangle.vert.spv"),
-                        p_name: shader_entry_name.as_ptr(),
-                        p_specialization_info: std::ptr::null(),
-                    },
-                    ash::vk::PipelineShaderStageCreateInfo {
-                        s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
-                        p_next: std::ptr::null(),
-                        flags: Default::default(),
-                        stage: ash::vk::ShaderStageFlags::FRAGMENT,
-                        module: create_shader_module(&logical_device, "shaders/006_spinning_triangle.frag.spv"),
-                        p_name: shader_entry_name.as_ptr(),
-                        p_specialization_info: std::ptr::null(),
-                    },
-                ];
+            ash::vk::PipelineShaderStageCreateInfo {
+                s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: std::ptr::null(),
+                flags: Default::default(),
+                stage: ash::vk::ShaderStageFlags::VERTEX,
+                module: create_shader_module(
+                    &logical_device,
+                    "shaders/006_spinning_triangle.vert.spv",
+                ),
+                p_name: shader_entry_name.as_ptr(),
+                p_specialization_info: std::ptr::null(),
+            },
+            ash::vk::PipelineShaderStageCreateInfo {
+                s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: std::ptr::null(),
+                flags: Default::default(),
+                stage: ash::vk::ShaderStageFlags::FRAGMENT,
+                module: create_shader_module(
+                    &logical_device,
+                    "shaders/006_spinning_triangle.frag.spv",
+                ),
+                p_name: shader_entry_name.as_ptr(),
+                p_specialization_info: std::ptr::null(),
+            },
+        ];
 
         let vertex_input_binding_description = ash::vk::VertexInputBindingDescription {
             binding: 0,
@@ -1095,7 +1101,7 @@ fn main() {
             v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
 
             logical_device
-                .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
+                .reset_fences(&[v_fences_ref_wait_gpu[index_of_acquired_image]])
                 .expect("Cannot reset fences");
 
             update_uniform_buffer(
@@ -1118,7 +1124,11 @@ fn main() {
                 p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
             };
             logical_device
-                .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
+                .queue_submit(
+                    queue,
+                    &[submit_info],
+                    v_fences_ref_wait_gpu[index_of_acquired_image],
+                )
                 .expect("Cannot submit queue");
 
             let present_info = ash::vk::PresentInfoKHR {
