@@ -4,19 +4,10 @@ extern crate nalgebra_glm as glm;
 extern crate num;
 extern crate sdl2;
 
+use ash::khr::external_semaphore_fd;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
-use std::time::Duration;
-
-use std::ffi::CString;
-
-use core::convert::Into;
-
-use ash::version::DeviceV1_0;
-use ash::version::EntryV1_0;
-use ash::version::InstanceV1_0;
-use ash::vk::Handle;
+use std::ffi::{CStr, CString};
 
 #[repr(C)]
 struct MyPointData {
@@ -31,6 +22,32 @@ struct MyUniformBuffer {
     m_projection: glm::Mat4,
 }
 
+unsafe fn my_vk_get_memory_fd_khr(
+    instance: &ash::Instance,
+    logical_device: &ash::Device,
+    memory_get_fd_info: ash::vk::MemoryGetFdInfoKHR,
+) -> i32 {
+    let p_name = CString::new("vkGetMemoryFdKHR").unwrap();
+    type MyFn = ash::vk::PFN_vkGetMemoryFdKHR;
+    let raw_func = instance
+        .get_device_proc_addr(logical_device.handle(), p_name.as_ptr())
+        .unwrap();
+    let func: MyFn = std::mem::transmute(raw_func);
+
+    let mut p_fd = 0;
+    let result = func(
+        logical_device.handle(),
+        &memory_get_fd_info as *const ash::vk::MemoryGetFdInfoKHR,
+        &mut p_fd as *mut i32,
+    );
+
+    if result == ash::vk::Result::SUCCESS {
+        p_fd
+    } else {
+        panic!("my_vk_get_memory_fd_khr !!");
+    }
+}
+
 unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::Instance {
     let v_layers =
         vec![CString::new("VK_LAYER_KHRONOS_validation").expect("Cannot validation layer name")];
@@ -40,10 +57,11 @@ unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::I
         s_type: ash::vk::StructureType::APPLICATION_INFO,
         p_next: std::ptr::null(),
         p_application_name: application_name.as_ptr(),
-        application_version: ash::vk_make_version!(1, 0, 0),
+        application_version: ash::vk::make_api_version(0, 1, 0, 0),
         p_engine_name: engine_name.as_ptr(),
-        engine_version: ash::vk_make_version!(0, 0, 1),
-        api_version: ash::vk_make_version!(1, 0, 0),
+        engine_version: ash::vk::make_api_version(0, 0, 0, 1),
+        api_version: ash::vk::API_VERSION_1_3,
+        ..Default::default()
     };
     let v_extensions_c: Vec<*const u8> = v_extensions.iter().map(|ss| ss.as_ptr()).collect();
     let instance_create_info = ash::vk::InstanceCreateInfo {
@@ -55,6 +73,7 @@ unsafe fn create_instance(entry: &ash::Entry, v_extensions: Vec<&str>) -> ash::I
         pp_enabled_layer_names: v_layers.as_ptr() as *const *const i8,
         enabled_extension_count: v_extensions_c.len() as u32,
         pp_enabled_extension_names: v_extensions_c.as_ptr() as *const *const i8,
+        ..Default::default()
     };
     entry
         .create_instance(&instance_create_info, None)
@@ -98,36 +117,52 @@ unsafe fn create_logical_device(
         queue_family_index: index_of_queue_family as u32,
         queue_count: 1,
         p_queue_priorities: &priority,
+        ..Default::default()
     };
 
-    let mut v_extensions = Vec::new();
-    v_extensions.push(ash::extensions::khr::Swapchain::name());
-    let v_extensions_c = v_extensions.iter().map(|e| e.as_ptr() as *const i8);
+    let v_extensions = vec![
+        // ash::khr::swapchain::NAME,
+        ash::khr::external_memory::NAME,
+        ash::khr::external_memory_fd::NAME,
+        ash::khr::external_semaphore::NAME,
+        // ash::khr::external_semaphore_fd::NAME,
+        ash::khr::timeline_semaphore::NAME,
+        ash::khr::dedicated_allocation::NAME,
+        ash::khr::get_memory_requirements2::NAME,
+    ];
+
+    let v_extensions_c: Vec<*const i8> = v_extensions
+        .iter()
+        .map(|e| e.as_ptr() as *const i8)
+        .collect();
+
     let device_create_info = ash::vk::DeviceCreateInfo {
         s_type: ash::vk::StructureType::DEVICE_CREATE_INFO,
         p_next: std::ptr::null(),
         flags: Default::default(),
         queue_create_info_count: 1,
         p_queue_create_infos: &queue_create_info,
-        enabled_layer_count: 0,
-        pp_enabled_layer_names: std::ptr::null(),
         enabled_extension_count: v_extensions_c.len() as u32,
-        pp_enabled_extension_names: v_extensions.as_ptr() as *const *const i8,
+        pp_enabled_extension_names: v_extensions_c.as_ptr() as *const *const i8,
         p_enabled_features: std::ptr::null(),
+        ..Default::default()
     };
     instance.create_device(*gpu, &device_create_info, None)
 }
 
 unsafe fn create_shader_module(
     logical_device: &ash::Device,
-    shaderPath: &str,
+    shader_path: &str,
 ) -> ash::vk::ShaderModule {
     let mut shader_files =
-        std::fs::File::open(shaderPath).expect("Something went wrong when opening shader");
+        std::fs::File::open(shader_path).expect("Something went wrong when opening shader");
     let shader_instructions =
         ash::util::read_spv(&mut shader_files).expect("Failed to read shader spv file");
-    let shader_module_create_infos =
-        ash::vk::ShaderModuleCreateInfo::builder().code(shader_instructions.as_slice());
+    let shader_module_create_infos = ash::vk::ShaderModuleCreateInfo {
+        p_code: shader_instructions.as_ptr() as *const u32,
+        code_size: 4 * shader_instructions.len(),
+        ..Default::default()
+    };
     logical_device
         .create_shader_module(&shader_module_create_infos, None)
         .expect("Cannot create shader module")
@@ -148,30 +183,6 @@ unsafe fn search_physical_device_memory_type(
         }
     }
     Err("Cannot find device memory type")
-}
-
-fn search_format(
-    v_surface_formats: &Vec<ash::vk::SurfaceFormatKHR>,
-) -> Result<&ash::vk::SurfaceFormatKHR, &'static str> {
-    for format in v_surface_formats {
-        if format.format == ash::vk::Format::B8G8R8A8_UNORM
-            && format.color_space == ash::vk::ColorSpaceKHR::SRGB_NONLINEAR
-        {
-            return Ok(format);
-        }
-    }
-    Err("Cannot find surface format")
-}
-
-fn choose_swapchain_present_mode(
-    v_present_modes: &Vec<ash::vk::PresentModeKHR>,
-) -> ash::vk::PresentModeKHR {
-    return match v_present_modes.iter().find(|mode| {
-        return **mode == ash::vk::PresentModeKHR::MAILBOX;
-    }) {
-        Some(mode) => *mode,
-        None => ash::vk::PresentModeKHR::FIFO,
-    };
 }
 
 fn handle_events(event_pump: &mut sdl2::EventPump) -> bool {
@@ -210,14 +221,14 @@ unsafe fn update_uniform_buffer(
     logical_device.unmap_memory(*memory);
 }
 
-const FRAME_COUNT: usize = 2;
+const FRAME_COUNT: usize = 1;
 fn main() {
     unsafe {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
-        let window_width = 1280;
-        let window_height = 720;
+        let window_width = 800;
+        let window_height = 600;
         let window = video_subsystem
             .window("rust-sdl2 demo", window_width, window_height)
             .vulkan()
@@ -225,101 +236,52 @@ fn main() {
             .build()
             .expect("Cannot build window!");
 
-        let entry = ash::Entry::new().expect("Cannot create entry");
-        let instance = create_instance(
-            &entry,
-            window
-                .vulkan_instance_extensions()
-                .expect("Cannot get instance extensions!"),
+        let entry = ash::Entry::load().expect("Cannot create entry");
+
+        let mut v_instance_extensions = window
+            .vulkan_instance_extensions()
+            .expect("Cannot get instance extensions!");
+
+        v_instance_extensions.push(ash::ext::debug_utils::NAME.to_str().unwrap());
+        v_instance_extensions.push(
+            ash::khr::external_memory_capabilities::NAME
+                .to_str()
+                .unwrap(),
         );
+        v_instance_extensions.push(
+            ash::khr::get_physical_device_properties2::NAME
+                .to_str()
+                .unwrap(),
+        );
+        v_instance_extensions.push(
+            ash::khr::external_semaphore_capabilities::NAME
+                .to_str()
+                .unwrap(),
+        );
+
+        let instance = create_instance(&entry, v_instance_extensions);
         let gpu = pick_up_one_gpu(&instance).expect("Cannot find GPU");
         let index_of_queue_family =
             lookup_queue_family_index(&instance, &gpu).expect("Cannot find graphics queue family");
+        let queue_family_indices = vec![index_of_queue_family];
         let logical_device = create_logical_device(&instance, &gpu, index_of_queue_family)
             .expect("Cannot create logical device");
         let queue = logical_device.get_device_queue(index_of_queue_family as u32, 0);
 
-        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
-        let surface_handle = window
-            .vulkan_create_surface(instance.handle().as_raw() as usize)
-            .expect("Cannot create surface");
-        let surface = ash::vk::SurfaceKHR::from_raw(surface_handle);
-
-        let presentation_supported = surface_loader.get_physical_device_surface_support(
-            gpu,
-            index_of_queue_family as u32,
-            surface,
-        );
-        if !presentation_supported {
-            println!("Presentation not supported !");
-            return;
-        }
-
-        let surface_capabilities = surface_loader
-            .get_physical_device_surface_capabilities(gpu, surface)
-            .expect("Cannot get surface capabilities");
-        let v_surface_formats = surface_loader
-            .get_physical_device_surface_formats(gpu, surface)
-            .expect("Cannot get physical device surface formats");
-        let v_surface_present_modes = surface_loader
-            .get_physical_device_surface_present_modes(gpu, surface)
-            .expect("Cannot get surface present mode");
-        let available_format =
-            search_format(&v_surface_formats).expect("Cannot find surface format");
-        let image_count = if surface_capabilities.max_image_count > 0
-            && surface_capabilities.min_image_count + 1 > surface_capabilities.max_image_count
-        {
-            surface_capabilities.max_image_count
-        } else {
-            surface_capabilities.min_image_count + 1
+        let available_format = ash::vk::SurfaceFormatKHR {
+            format: ash::vk::Format::B8G8R8A8_SRGB,
+            color_space: ash::vk::ColorSpaceKHR::SRGB_NONLINEAR,
         };
 
-        let extent = if surface_capabilities.current_extent.width != !(0 as u32) {
-            surface_capabilities.current_extent
-        } else {
-            ash::vk::Extent2D {
-                width: num::clamp(
-                    window_width,
-                    surface_capabilities.min_image_extent.width,
-                    surface_capabilities.max_image_extent.width,
-                ),
-                height: num::clamp(
-                    window_height,
-                    surface_capabilities.min_image_extent.height,
-                    surface_capabilities.max_image_extent.height,
-                ),
-            }
+        //     pub const B8G8R8A8_UNORM: Self = Format(44);
+        // pub const SRGB_NONLINE AR: Self = ColorSpaceKHR(0);
+
+        let swapchain_size = FRAME_COUNT;
+        let extent = ash::vk::Extent2D {
+            width: window_width,
+            height: window_height,
         };
 
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(&instance, &logical_device);
-        let swapchain_create_info = ash::vk::SwapchainCreateInfoKHR {
-            s_type: ash::vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
-            p_next: std::ptr::null(),
-            flags: Default::default(), //ash::vk::SwapchainCreateFlagsKHR::SPLIT_INSTANCE_BIND_REGIONS,
-            surface: surface,
-            min_image_count: image_count,
-            image_format: available_format.format,
-            image_color_space: available_format.color_space,
-            image_extent: extent,
-            image_array_layers: 1,
-            image_usage: ash::vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            image_sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
-            queue_family_index_count: 0,
-            p_queue_family_indices: std::ptr::null(),
-            pre_transform: surface_capabilities.current_transform,
-            composite_alpha: ash::vk::CompositeAlphaFlagsKHR::OPAQUE,
-            present_mode: choose_swapchain_present_mode(&v_surface_present_modes),
-            clipped: ash::vk::TRUE,
-            old_swapchain: ash::vk::SwapchainKHR::null(),
-        };
-
-        let swapchain = swapchain_loader
-            .create_swapchain(&swapchain_create_info, None)
-            .expect("Cannot create swapchain");
-        let v_swapchain_images = swapchain_loader
-            .get_swapchain_images(swapchain)
-            .expect("Cannot get swapchain images");
-        let swapchain_size = v_swapchain_images.len();
         let component_mapping = ash::vk::ComponentMapping {
             r: ash::vk::ComponentSwizzle::IDENTITY,
             g: ash::vk::ComponentSwizzle::IDENTITY,
@@ -348,6 +310,7 @@ fn main() {
                 ),
                 p_name: shader_entry_name.as_ptr(),
                 p_specialization_info: std::ptr::null(),
+                ..Default::default()
             },
             ash::vk::PipelineShaderStageCreateInfo {
                 s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -360,6 +323,7 @@ fn main() {
                 ),
                 p_name: shader_entry_name.as_ptr(),
                 p_specialization_info: std::ptr::null(),
+                ..Default::default()
             },
         ];
 
@@ -392,6 +356,7 @@ fn main() {
             p_vertex_binding_descriptions: &vertex_input_binding_description,
             vertex_attribute_description_count: v_vertex_input_attribute_description.len() as u32,
             p_vertex_attribute_descriptions: v_vertex_input_attribute_description.as_ptr(),
+            ..Default::default()
         };
 
         let input_assembly_state_create_info = ash::vk::PipelineInputAssemblyStateCreateInfo {
@@ -400,6 +365,7 @@ fn main() {
             flags: Default::default(),
             topology: ash::vk::PrimitiveTopology::TRIANGLE_LIST,
             primitive_restart_enable: ash::vk::FALSE,
+            ..Default::default()
         };
 
         let viewport = ash::vk::Viewport {
@@ -427,6 +393,7 @@ fn main() {
             p_viewports: &viewport,
             scissor_count: 1,
             p_scissors: &scissor,
+            ..Default::default()
         };
 
         let rasterization_state_create_info = ash::vk::PipelineRasterizationStateCreateInfo {
@@ -443,6 +410,7 @@ fn main() {
             depth_bias_clamp: 0f32,
             depth_bias_slope_factor: 0f32,
             line_width: 1f32,
+            ..Default::default()
         };
 
         let multisample_state_create_info = ash::vk::PipelineMultisampleStateCreateInfo {
@@ -455,6 +423,7 @@ fn main() {
             p_sample_mask: std::ptr::null(),
             alpha_to_coverage_enable: ash::vk::FALSE,
             alpha_to_one_enable: ash::vk::FALSE,
+            ..Default::default()
         };
 
         let depth_stencil_state_create_info = ash::vk::PipelineDepthStencilStateCreateInfo {
@@ -470,6 +439,7 @@ fn main() {
             back: Default::default(),
             min_depth_bounds: 0f32,
             max_depth_bounds: 1f32,
+            ..Default::default()
         };
 
         let color_blend_attachment = ash::vk::PipelineColorBlendAttachmentState {
@@ -484,6 +454,7 @@ fn main() {
                 | ash::vk::ColorComponentFlags::G
                 | ash::vk::ColorComponentFlags::B
                 | ash::vk::ColorComponentFlags::A,
+            ..Default::default()
         };
 
         let color_blend_state_create_info = ash::vk::PipelineColorBlendStateCreateInfo {
@@ -495,6 +466,7 @@ fn main() {
             attachment_count: 1,
             p_attachments: &color_blend_attachment,
             blend_constants: [0f32; 4],
+            ..Default::default()
         };
 
         let dynamic_state_create_info = ash::vk::PipelineDynamicStateCreateInfo {
@@ -503,6 +475,7 @@ fn main() {
             flags: Default::default(),
             dynamic_state_count: 0 as u32,
             p_dynamic_states: std::ptr::null(),
+            ..Default::default()
         };
 
         let uniform_buffer_binding_number = 5;
@@ -512,6 +485,7 @@ fn main() {
             descriptor_count: 1,
             stage_flags: ash::vk::ShaderStageFlags::VERTEX,
             p_immutable_samplers: std::ptr::null(),
+            ..Default::default()
         };
 
         let descriptor_set_layout_create_info = ash::vk::DescriptorSetLayoutCreateInfo {
@@ -520,6 +494,7 @@ fn main() {
             flags: Default::default(),
             binding_count: 1,
             p_bindings: &descriptor_set_layout_binding,
+            ..Default::default()
         };
 
         let descriptor_set_layout = logical_device
@@ -538,6 +513,7 @@ fn main() {
             max_sets: swapchain_size as u32,
             pool_size_count: 1,
             p_pool_sizes: &descriptor_pool_size,
+            ..Default::default()
         };
         let descriptor_pool = logical_device
             .create_descriptor_pool(&descriptor_pool_create_info, None)
@@ -550,9 +526,10 @@ fn main() {
             descriptor_pool: descriptor_pool,
             descriptor_set_count: v_descriptor_set_layout_refs.len() as u32,
             p_set_layouts: v_descriptor_set_layout_refs.as_ptr(),
+            ..Default::default()
         };
         let v_descriptor_sets = logical_device
-            .allocate_descriptor_sets(&descriptor_set_allocate_info)
+            .allocate_descriptor_sets(&descriptor_set_allocate_info) 
             .expect("Cannot allocate descriptor set");
 
         let pipeline_layout_create_info = ash::vk::PipelineLayoutCreateInfo {
@@ -563,6 +540,7 @@ fn main() {
             p_set_layouts: &descriptor_set_layout,
             push_constant_range_count: 0,
             p_push_constant_ranges: std::ptr::null(),
+            ..Default::default()
         };
 
         let pipeline_layout = logical_device
@@ -584,6 +562,7 @@ fn main() {
         let color_attachment_reference = ash::vk::AttachmentReference {
             attachment: 0,
             layout: ash::vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            ..Default::default()
         };
 
         let subpass_description = ash::vk::SubpassDescription {
@@ -597,6 +576,7 @@ fn main() {
             p_depth_stencil_attachment: std::ptr::null(),
             preserve_attachment_count: 0,
             p_preserve_attachments: std::ptr::null(),
+            ..Default::default()
         };
 
         let render_pass_create_info = ash::vk::RenderPassCreateInfo {
@@ -609,6 +589,7 @@ fn main() {
             p_subpasses: &subpass_description,
             dependency_count: 0,
             p_dependencies: std::ptr::null(),
+            ..Default::default()
         };
         let render_pass = logical_device
             .create_render_pass(&render_pass_create_info, None)
@@ -634,6 +615,7 @@ fn main() {
             subpass: 0,
             base_pipeline_handle: ash::vk::Pipeline::null(),
             base_pipeline_index: -1,
+            ..Default::default()
         };
 
         let v_graphics_pipelines = logical_device
@@ -646,6 +628,100 @@ fn main() {
 
         let graphics_pipeline = v_graphics_pipelines[0];
 
+        let mut v_swapchain_images = vec![ash::vk::Image::null(); FRAME_COUNT];
+        let mut v_swapchain_image_memories = vec![ash::vk::DeviceMemory::null(); FRAME_COUNT];
+        for i in 0..FRAME_COUNT {
+            let external_memory_buffer_create_info = ash::vk::ExternalMemoryImageCreateInfo {
+                s_type: ash::vk::StructureType::EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+                p_next: std::ptr::null(),
+                handle_types: ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                ..Default::default()
+            };
+
+            let image_create_info = ash::vk::ImageCreateInfo {
+                s_type: ash::vk::StructureType::IMAGE_CREATE_INFO,
+                p_next: &external_memory_buffer_create_info
+                    as *const ash::vk::ExternalMemoryImageCreateInfo
+                    as *const std::os::raw::c_void,
+                flags: Default::default(),
+                image_type: ash::vk::ImageType::TYPE_2D,
+                format: available_format.format,
+                extent: ash::vk::Extent3D {
+                    width: window_width,
+                    height: window_height,
+                    depth: 1,
+                },
+                mip_levels: 1,
+                array_layers: 1,
+                samples: ash::vk::SampleCountFlags::TYPE_1,
+                tiling: ash::vk::ImageTiling::OPTIMAL,
+                usage: ash::vk::ImageUsageFlags::TRANSFER_DST | ash::vk::ImageUsageFlags::SAMPLED,
+                sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
+                queue_family_index_count: queue_family_indices.len() as u32,
+                p_queue_family_indices: queue_family_indices.as_ptr() as *const u32,
+                initial_layout: ash::vk::ImageLayout::UNDEFINED,
+                ..Default::default()
+            };
+
+            v_swapchain_images[i] = logical_device
+                .create_image(&image_create_info, None)
+                .unwrap();
+
+            let mem_requirements =
+                logical_device.get_image_memory_requirements(v_swapchain_images[i]);
+
+            let dedicated_memory_info = ash::vk::MemoryDedicatedAllocateInfoKHR {
+                s_type: ash::vk::StructureType::MEMORY_DEDICATED_ALLOCATE_INFO,
+                p_next: std::ptr::null(),
+                image: v_swapchain_images[i],
+                buffer: ash::vk::Buffer::null(),
+                ..Default::default()
+            };
+
+            let export_alloc_info = ash::vk::ExportMemoryAllocateInfo {
+                s_type: ash::vk::StructureType::EXPORT_MEMORY_ALLOCATE_INFO,
+                p_next: &dedicated_memory_info as *const ash::vk::MemoryDedicatedAllocateInfoKHR
+                    as *const std::os::raw::c_void,
+                handle_types: ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                ..Default::default()
+            };
+
+            let properties = ash::vk::MemoryPropertyFlags::DEVICE_LOCAL;
+
+            let memory_alloc_info = ash::vk::MemoryAllocateInfo {
+                s_type: ash::vk::StructureType::MEMORY_ALLOCATE_INFO,
+                p_next: &export_alloc_info as *const ash::vk::ExportMemoryAllocateInfo
+                    as *const std::os::raw::c_void,
+                allocation_size: mem_requirements.size,
+                memory_type_index: search_physical_device_memory_type(
+                    &instance,
+                    &gpu,
+                    &mem_requirements,
+                    properties,
+                )
+                .unwrap() as u32,
+                ..Default::default()
+            };
+
+            v_swapchain_image_memories[i] = logical_device
+                .allocate_memory(&memory_alloc_info, None)
+                .unwrap();
+            logical_device
+                .bind_image_memory(v_swapchain_images[i], v_swapchain_image_memories[i], 0)
+                .unwrap();
+
+            let memory_get_fd_info = ash::vk::MemoryGetFdInfoKHR {
+                s_type: ash::vk::StructureType::MEMORY_GET_FD_INFO_KHR,
+                p_next: std::ptr::null(),
+                memory: v_swapchain_image_memories[i],
+                handle_type: ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+                ..Default::default()
+            };
+
+            // FD here
+            let fd = my_vk_get_memory_fd_khr(&instance, &logical_device, memory_get_fd_info);
+        }
+
         let mut v_image_views = Vec::with_capacity(v_swapchain_images.len());
         for image in &v_swapchain_images {
             let image_view_create_info = ash::vk::ImageViewCreateInfo {
@@ -657,6 +733,7 @@ fn main() {
                 format: available_format.format,
                 components: component_mapping,
                 subresource_range: subresource_range,
+                ..Default::default()
             };
             v_image_views.push(
                 logical_device
@@ -677,6 +754,7 @@ fn main() {
                 width: extent.width,
                 height: extent.height,
                 layers: 1,
+                ..Default::default()
             };
             v_framebuffers.push(
                 logical_device
@@ -690,6 +768,7 @@ fn main() {
             p_next: std::ptr::null(),
             flags: ash::vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             queue_family_index: index_of_queue_family as u32,
+            ..Default::default()
         };
 
         let command_pool = logical_device
@@ -702,6 +781,7 @@ fn main() {
             command_pool: command_pool,
             level: ash::vk::CommandBufferLevel::PRIMARY,
             command_buffer_count: swapchain_size as u32,
+            ..Default::default()
         };
 
         let v_command_buffers = logical_device
@@ -735,6 +815,7 @@ fn main() {
             sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
             queue_family_index_count: 0,
             p_queue_family_indices: std::ptr::null(),
+            ..Default::default()
         };
 
         let staging_buffer = logical_device
@@ -757,6 +838,7 @@ fn main() {
             p_next: std::ptr::null(),
             allocation_size: staging_buffer_memory_requirements.size,
             memory_type_index: staging_buffer_memory_type_index as u32,
+            ..Default::default()
         };
         let device_memory_for_staging_buffer = logical_device
             .allocate_memory(&memory_allocate_info_for_staging_buffer, None)
@@ -797,6 +879,7 @@ fn main() {
             sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
             queue_family_index_count: 0,
             p_queue_family_indices: std::ptr::null(),
+            ..Default::default()
         };
 
         let vertex_buffer = logical_device
@@ -819,6 +902,7 @@ fn main() {
             p_next: std::ptr::null(),
             allocation_size: vertex_buffer_memory_requirements.size,
             memory_type_index: vertex_buffer_memory_type_index as u32,
+            ..Default::default()
         };
 
         let device_memory_for_vertex_buffer = logical_device
@@ -838,6 +922,7 @@ fn main() {
             command_pool: command_pool,
             level: ash::vk::CommandBufferLevel::PRIMARY,
             command_buffer_count: 1,
+            ..Default::default()
         };
 
         let command_buffer_copy_buffer = logical_device
@@ -848,6 +933,7 @@ fn main() {
             p_next: std::ptr::null(),
             flags: ash::vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             p_inheritance_info: std::ptr::null(),
+            ..Default::default()
         };
         logical_device
             .begin_command_buffer(command_buffer_copy_buffer, &command_buffer_begin_info)
@@ -876,6 +962,7 @@ fn main() {
             p_command_buffers: &command_buffer_copy_buffer,
             signal_semaphore_count: 0,
             p_signal_semaphores: std::ptr::null(),
+            ..Default::default()
         };
         logical_device
             .queue_submit(queue, &[copy_buffer_submit_info], ash::vk::Fence::null())
@@ -902,6 +989,7 @@ fn main() {
                 sharing_mode: ash::vk::SharingMode::EXCLUSIVE,
                 queue_family_index_count: 0,
                 p_queue_family_indices: std::ptr::null(),
+                ..Default::default()
             };
             v_uniform_buffers.push(
                 logical_device
@@ -923,6 +1011,7 @@ fn main() {
                 )
                 .expect("Cannot find memory type for uniform buffer memory")
                     as u32,
+                ..Default::default()
             };
             v_memory_uniform_buffers.push(
                 logical_device
@@ -948,6 +1037,7 @@ fn main() {
                 p_image_info: std::ptr::null(),
                 p_buffer_info: &descriptor_buffer_info,
                 p_texel_buffer_view: std::ptr::null(),
+                ..Default::default()
             };
             logical_device.update_descriptor_sets(&[descriptor_write], &[]);
         }
@@ -967,6 +1057,7 @@ fn main() {
                 p_next: std::ptr::null(),
                 flags: Default::default(),
                 p_inheritance_info: std::ptr::null(),
+                ..Default::default()
             };
 
             logical_device
@@ -981,6 +1072,7 @@ fn main() {
                 render_area: render_area,
                 clear_value_count: 1,
                 p_clear_values: &clear_values,
+                ..Default::default()
             };
 
             logical_device.cmd_begin_render_pass(
@@ -1018,18 +1110,41 @@ fn main() {
             s_type: ash::vk::StructureType::FENCE_CREATE_INFO,
             p_next: std::ptr::null(),
             flags: ash::vk::FenceCreateFlags::SIGNALED,
+            ..Default::default()
         };
 
-        let semaphore_acquired_image_create_info = ash::vk::SemaphoreCreateInfo {
-            s_type: ash::vk::StructureType::SEMAPHORE_CREATE_INFO,
+        let physical_device_external_semaphore_info =
+            ash::vk::PhysicalDeviceExternalSemaphoreInfo {
+                s_type: ash::vk::StructureType::PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
+                p_next: std::ptr::null(),
+                handle_type: ash::vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD,
+                ..Default::default()
+            };
+
+        let mut external_semaphore_properties = ash::vk::ExternalSemaphoreProperties {
+            s_type: ash::vk::StructureType::EXTERNAL_SEMAPHORE_PROPERTIES,
+            ..Default::default()
+        };
+
+        instance.get_physical_device_external_semaphore_properties(
+            gpu,
+            &physical_device_external_semaphore_info,
+            &mut external_semaphore_properties,
+        );
+
+        let external_semaphore_create_info = ash::vk::ExportSemaphoreCreateInfo {
+            s_type: ash::vk::StructureType::EXPORT_SEMAPHORE_CREATE_INFO,
             p_next: std::ptr::null(),
-            flags: Default::default(),
+            handle_types: external_semaphore_properties.compatible_handle_types,
+            ..Default::default()
         };
 
         let semaphore_pipeline_done_create_info = ash::vk::SemaphoreCreateInfo {
             s_type: ash::vk::StructureType::SEMAPHORE_CREATE_INFO,
-            p_next: std::ptr::null(),
+            p_next: &external_semaphore_create_info as *const ash::vk::ExportSemaphoreCreateInfo
+                as *const std::ffi::c_void,
             flags: Default::default(),
+            ..Default::default()
         };
 
         let v_fences_wait_gpu = [
@@ -1041,15 +1156,9 @@ fn main() {
                 .expect("Cannot create fence"),
         ];
         let mut v_fences_ref_wait_gpu = vec![ash::vk::Fence::null(); swapchain_size];
-        let mut v_semaphores_acquired_image = Vec::with_capacity(FRAME_COUNT);
         let mut v_semaphores_pipeline_done = Vec::with_capacity(FRAME_COUNT);
 
         for _ in 0..FRAME_COUNT {
-            v_semaphores_acquired_image.push(
-                logical_device
-                    .create_semaphore(&semaphore_acquired_image_create_info, None)
-                    .expect("Cannot create sempahore"),
-            );
             v_semaphores_pipeline_done.push(
                 logical_device
                     .create_semaphore(&semaphore_pipeline_done_create_info, None)
@@ -1077,16 +1186,7 @@ fn main() {
                 .wait_for_fences(&[v_fences_wait_gpu[current_frame]], true, !(0 as u64))
                 .expect("Cannot wait for fences");
 
-            let infos_of_acquired_image = swapchain_loader
-                .acquire_next_image(
-                    swapchain,
-                    !(0 as u64),
-                    v_semaphores_acquired_image[current_frame],
-                    ash::vk::Fence::null(),
-                )
-                .expect("Cannot acquire next image");
-
-            let index_of_acquired_image = infos_of_acquired_image.0 as usize;
+            let index_of_acquired_image = current_frame;
 
             if v_fences_ref_wait_gpu[index_of_acquired_image] != ash::vk::Fence::null() {
                 logical_device
@@ -1110,18 +1210,17 @@ fn main() {
                 &mut matrices,
             );
 
-            let wait_stage_submit_info = ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
             let submit_info = ash::vk::SubmitInfo {
                 s_type: ash::vk::StructureType::SUBMIT_INFO,
                 p_next: std::ptr::null(),
-                wait_semaphore_count: 1,
-                p_wait_semaphores: &v_semaphores_acquired_image[current_frame],
-                p_wait_dst_stage_mask: &wait_stage_submit_info
-                    as *const ash::vk::PipelineStageFlags,
+                wait_semaphore_count: 0,
+                p_wait_semaphores: std::ptr::null(),
+                p_wait_dst_stage_mask: std::ptr::null(),
                 command_buffer_count: 1,
                 p_command_buffers: &v_command_buffers[index_of_acquired_image],
                 signal_semaphore_count: 1,
                 p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
+                ..Default::default()
             };
             logical_device
                 .queue_submit(
@@ -1130,20 +1229,6 @@ fn main() {
                     v_fences_ref_wait_gpu[index_of_acquired_image],
                 )
                 .expect("Cannot submit queue");
-
-            let present_info = ash::vk::PresentInfoKHR {
-                s_type: ash::vk::StructureType::PRESENT_INFO_KHR,
-                p_next: std::ptr::null(),
-                wait_semaphore_count: 1,
-                p_wait_semaphores: &v_semaphores_pipeline_done[current_frame],
-                swapchain_count: 1,
-                p_swapchains: &swapchain,
-                p_image_indices: &infos_of_acquired_image.0,
-                p_results: std::ptr::null_mut(),
-            };
-            swapchain_loader
-                .queue_present(queue, &present_info)
-                .expect("Cannot present image");
 
             current_frame = (current_frame + 1) % FRAME_COUNT;
         }
