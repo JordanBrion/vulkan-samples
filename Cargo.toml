@@ -20,3 +20,7 @@ gstreamer-rtsp-server = { git = "https://github.com/GStreamer/gstreamer-rs", pac
 gstreamer-utils = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-utils" }
 gstreamer-video = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-video" }
 gstreamer-vulkan = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-vulkan" }
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

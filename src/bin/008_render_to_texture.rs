@@ -1101,7 +1101,7 @@ fn main() {
             v_fences_ref_wait_gpu[index_of_acquired_image] = v_fences_wait_gpu[current_frame];
 
             logical_device
-                .reset_fences(&[v_fences_ref_wait_gpu[current_frame]])
+                .reset_fences(&[v_fences_ref_wait_gpu[index_of_acquired_image]])
                 .expect("Cannot reset fences");
 
             update_uniform_buffer(
@@ -1124,7 +1124,11 @@ fn main() {
                 p_signal_semaphores: &v_semaphores_pipeline_done[current_frame],
             };
             logical_device
-                .queue_submit(queue, &[submit_info], v_fences_ref_wait_gpu[current_frame])
+                .queue_submit(
+                    queue,
+                    &[submit_info],
+                    v_fences_ref_wait_gpu[index_of_acquired_image],
+                )
                 .expect("Cannot submit queue");
 
             let present_info = ash::vk::PresentInfoKHR {
