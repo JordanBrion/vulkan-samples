@@ -959,7 +959,7 @@ fn main() {
             };
             let clear_values = ash::vk::ClearValue {
                 color: ash::vk::ClearColorValue {
-                    float32: [1.0, 0.0, 1.0, 1.0],
+                    float32: [0.5, 0.5, 0.5, 1.0],
                 },
             };
             let command_buffer_begin_info = ash::vk::CommandBufferBeginInfo {
