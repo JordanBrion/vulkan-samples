@@ -512,25 +512,31 @@ fn main() {
         let shader_entry_name =
             CString::new("main").expect("Cannot create vertex shader entry name");
         let v_pipeline_shader_stage_create_infos = [
-                    ash::vk::PipelineShaderStageCreateInfo {
-                        s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
-                        p_next: std::ptr::null(),
-                        flags: Default::default(),
-                        stage: ash::vk::ShaderStageFlags::VERTEX,
-                        module: create_shader_module(&logical_device, "shaders/007_textured_triangle.vert.spv"),
-                        p_name: shader_entry_name.as_ptr(),
-                        p_specialization_info: std::ptr::null(),
-                    },
-                    ash::vk::PipelineShaderStageCreateInfo {
-                        s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
-                        p_next: std::ptr::null(),
-                        flags: Default::default(),
-                        stage: ash::vk::ShaderStageFlags::FRAGMENT,
-                        module: create_shader_module(&logical_device, "shaders/007_textured_triangle.frag.spv"),
-                        p_name: shader_entry_name.as_ptr(),
-                        p_specialization_info: std::ptr::null(),
-                    },
-                ];
+            ash::vk::PipelineShaderStageCreateInfo {
+                s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: std::ptr::null(),
+                flags: Default::default(),
+                stage: ash::vk::ShaderStageFlags::VERTEX,
+                module: create_shader_module(
+                    &logical_device,
+                    "shaders/007_textured_triangle.vert.spv",
+                ),
+                p_name: shader_entry_name.as_ptr(),
+                p_specialization_info: std::ptr::null(),
+            },
+            ash::vk::PipelineShaderStageCreateInfo {
+                s_type: ash::vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+                p_next: std::ptr::null(),
+                flags: Default::default(),
+                stage: ash::vk::ShaderStageFlags::FRAGMENT,
+                module: create_shader_module(
+                    &logical_device,
+                    "shaders/007_textured_triangle.frag.spv",
+                ),
+                p_name: shader_entry_name.as_ptr(),
+                p_specialization_info: std::ptr::null(),
+            },
+        ];
 
         let vertex_input_binding_description = ash::vk::VertexInputBindingDescription {
             binding: 0,
@@ -1073,8 +1079,8 @@ fn main() {
         logical_device.free_memory(device_memory_for_staging_buffer, None);
 
         // TEXTURE: staging buffer creation
-        let jpg_file = std::fs::File::open("textures/texture.jpg")
-            .expect("failed to open .jpg texture");
+        let jpg_file =
+            std::fs::File::open("textures/texture.jpg").expect("failed to open .jpg texture");
         let mut decoder = jpeg::Decoder::new(std::io::BufReader::new(jpg_file));
         let raw_texture_data = decoder.decode().expect("failed to decode jpg texture");
         let jpg_metadata = decoder.info().unwrap();
