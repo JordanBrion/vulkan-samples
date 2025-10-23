@@ -1,92 +1,367 @@
 extern crate anyhow;
-extern crate glib;
-extern crate glib_sys;
-extern crate gst;
 extern crate gstreamer_rtsp_server;
-extern crate termion;
 
-use gst::{prelude::*, ClockTime};
-use gstreamer_rtsp_server::prelude::{
-    RTSPMediaExt, RTSPMediaFactoryExt, RTSPMountPointsExt, RTSPServerExt, RTSPServerExtManual,
-};
+use std::fmt::Error;
 
-const WIDTH: usize = 384;
-const HEIGHT: usize = 288;
-const BYTES_PER_PIXEL: usize = 2;
-const FRAME_SIZE: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL; // RGB16
+use gstreamer_rtsp_server::prelude::*;
 
-fn create_blue_frame_buffer() -> gst::Buffer {
-    let buffer = gst::Buffer::with_size(FRAME_SIZE).unwrap();
-    let mut mapinfo = buffer.into_mapped_buffer_writable().unwrap();
-    unsafe {
-        let ptr = mapinfo.as_mut_ptr() as *mut u16;
-        for i in 0..HEIGHT {
-            for j in 0..WIDTH {
-                let current_pixel_ptr = ptr.offset((i * WIDTH + j) as isize);
-                *current_pixel_ptr = 0b1111100000011111;
+#[derive(Debug)]
+struct NoMountPoints;
+
+fn main_loop() -> Result<(), Error> {
+    let main_loop = glib::MainLoop::new(None, false);
+    let server = server::Server::default();
+
+    let mounts = mount_points::MountPoints::default();
+    server.set_mount_points(Some(&mounts));
+
+    // Much like HTTP servers, RTSP servers have multiple endpoints that
+    // provide different streams. Here, we ask our server to give
+    // us a reference to his list of endpoints, so we can add our
+    // test endpoint, providing the pipeline from the cli.
+    let mounts = server.mount_points().ok_or(NoMountPoints).unwrap();
+
+    // Next, we create our custom factory for the endpoint we want to create.
+    // The job of the factory is to create a new pipeline for each client that
+    // connects, or (if configured to do so) to reuse an existing pipeline.
+    let factory = media_factory::Factory::default();
+    // This setting specifies whether each connecting client gets the output
+    // of a new instance of the pipeline, or whether all connected clients share
+    // the output of the same pipeline.
+    // If you want to stream a fixed video you have stored on the server to any
+    // client, you would not set this to shared here (since every client wants
+    // to start at the beginning of the video). But if you want to distribute
+    // a live source, you will probably want to set this to shared, to save
+    // computing and memory capacity on the server.
+    factory.set_shared(true);
+
+    // Now we add a new mount-point and tell the RTSP server to serve the content
+    // provided by the factory we configured above, when a client connects to
+    // this specific path.
+    mounts.add_factory("/test", factory);
+
+    // Attach the server to our main context.
+    // A main context is the thing where other stuff is registering itself for its
+    // events (e.g. sockets, GStreamer bus, ...) and the main loop is something that
+    // polls the main context for its events and dispatches them to whoever is
+    // interested in them. In this example, we only do have one, so we can
+    // leave the context parameter empty, it will automatically select
+    // the default one.
+    let id = server.attach(None).unwrap();
+
+    println!(
+        "Stream ready at rtsp://127.0.0.1:{}/test",
+        server.bound_port()
+    );
+
+    // Start the mainloop. From this point on, the server will start to serve
+    // our quality content to connecting clients.
+    main_loop.run();
+
+    id.remove();
+
+    Ok(())
+}
+
+// Our custom media factory that creates a media input manually
+mod media_factory {
+    use gstreamer_rtsp_server::subclass::prelude::*;
+
+    use super::*;
+
+    // In the imp submodule we include the actual implementation
+    mod imp {
+        use super::*;
+
+        // This is the private data of our factory
+        #[derive(Default)]
+        pub struct Factory {}
+
+        // This trait registers our type with the GObject object system and
+        // provides the entry points for creating a new instance and setting
+        // up the class data
+        #[glib::object_subclass]
+        impl ObjectSubclass for Factory {
+            const NAME: &'static str = "RsRTSPMediaFactory";
+            type Type = super::Factory;
+            type ParentType = gstreamer_rtsp_server::RTSPMediaFactory;
+        }
+
+        // Implementation of glib::Object virtual methods
+        impl ObjectImpl for Factory {
+            fn constructed(&self) {
+                self.parent_constructed();
+
+                let factory = self.obj();
+                // All media created by this factory are our custom media type. This would
+                // not require a media factory subclass and can also be called on the normal
+                // RTSPMediaFactory.
+                factory.set_media_gtype(super::media::Media::static_type());
+            }
+        }
+
+        // Implementation of gstreamer_rtsp_server::RTSPMediaFactory virtual methods
+        impl RTSPMediaFactoryImpl for Factory {
+            fn create_element(
+                &self,
+                _url: &gstreamer_rtsp_server::gst_rtsp::RTSPUrl,
+            ) -> Option<gst::Element> {
+                // Create a simple VP8 videotestsrc input
+                let bin = gst::Bin::default();
+                let src = gst::ElementFactory::make("videotestsrc")
+                    // Configure the videotestsrc live
+                    .property("is-live", true)
+                    .build()
+                    .unwrap();
+                let enc = gst::ElementFactory::make("vp8enc")
+                    // Produce encoded data as fast as possible
+                    .property("deadline", 1i64)
+                    .build()
+                    .unwrap();
+
+                // The names of the payloaders must be payX
+                let pay = gst::ElementFactory::make("rtpvp8pay")
+                    .name("pay0")
+                    .build()
+                    .unwrap();
+
+                bin.add_many([&src, &enc, &pay]).unwrap();
+                gst::Element::link_many([&src, &enc, &pay]).unwrap();
+
+                Some(bin.upcast())
             }
         }
     }
-    mapinfo.into_buffer()
+
+    // This here defines the public interface of our factory and implements
+    // the corresponding traits so that it behaves like any other RTSPMediaFactory
+    glib::wrapper! {
+        pub struct Factory(ObjectSubclass<imp::Factory>) @extends gstreamer_rtsp_server::RTSPMediaFactory;
+    }
+
+    impl Default for Factory {
+        // Creates a new instance of our factory
+        fn default() -> Factory {
+            glib::Object::new()
+        }
+    }
+}
+
+// Our custom media subclass that adds a custom attribute to the SDP returned by DESCRIBE
+mod media {
+    use gstreamer_rtsp_server::subclass::prelude::*;
+
+    // In the imp submodule we include the actual implementation
+    mod imp {
+        use super::*;
+
+        // This is the private data of our media
+        #[derive(Default)]
+        pub struct Media {}
+
+        // This trait registers our type with the GObject object system and
+        // provides the entry points for creating a new instance and setting
+        // up the class data
+        #[glib::object_subclass]
+        impl ObjectSubclass for Media {
+            const NAME: &'static str = "RsRTSPMedia";
+            type Type = super::Media;
+            type ParentType = gstreamer_rtsp_server::RTSPMedia;
+        }
+
+        // Implementation of glib::Object virtual methods
+        impl ObjectImpl for Media {}
+
+        // Implementation of gstreamer_rtsp_server::RTSPMedia virtual methods
+        impl RTSPMediaImpl for Media {
+            fn setup_sdp(
+                &self,
+                sdp: &mut gstreamer_rtsp_server::gst_sdp::SDPMessageRef,
+                info: &gstreamer_rtsp_server::subclass::SDPInfo,
+            ) -> Result<(), gst::LoggableError> {
+                self.parent_setup_sdp(sdp, info)?;
+
+                sdp.add_attribute("my-custom-attribute", Some("has-a-value"));
+
+                Ok(())
+            }
+        }
+    }
+
+    // This here defines the public interface of our factory and implements
+    // the corresponding traits so that it behaves like any other RTSPMedia
+    glib::wrapper! {
+        pub struct Media(ObjectSubclass<imp::Media>) @extends gstreamer_rtsp_server::RTSPMedia;
+    }
+}
+
+// Our custom RTSP server subclass that reports when clients are connecting and uses
+// our custom RTSP client subclass for each client
+mod server {
+    use gstreamer_rtsp_server::subclass::prelude::*;
+
+    use super::*;
+
+    // In the imp submodule we include the actual implementation
+    mod imp {
+        use super::*;
+
+        // This is the private data of our server
+        #[derive(Default)]
+        pub struct Server {}
+
+        // This trait registers our type with the GObject object system and
+        // provides the entry points for creating a new instance and setting
+        // up the class data
+        #[glib::object_subclass]
+        impl ObjectSubclass for Server {
+            const NAME: &'static str = "RsRTSPServer";
+            type Type = super::Server;
+            type ParentType = gstreamer_rtsp_server::RTSPServer;
+        }
+
+        // Implementation of glib::Object virtual methods
+        impl ObjectImpl for Server {}
+
+        // Implementation of gstreamer_rtsp_server::RTSPServer virtual methods
+        impl RTSPServerImpl for Server {
+            fn create_client(&self) -> Option<gstreamer_rtsp_server::RTSPClient> {
+                let server = self.obj();
+                let client = super::client::Client::default();
+
+                // Duplicated from the default implementation
+                client.set_session_pool(server.session_pool().as_ref());
+                client.set_mount_points(server.mount_points().as_ref());
+                client.set_auth(server.auth().as_ref());
+                client.set_thread_pool(server.thread_pool().as_ref());
+
+                Some(client.upcast())
+            }
+
+            fn client_connected(&self, client: &gstreamer_rtsp_server::RTSPClient) {
+                self.parent_client_connected(client);
+                println!("Client {client:?} connected");
+            }
+        }
+    }
+
+    // This here defines the public interface of our factory and implements
+    // the corresponding traits so that it behaves like any other RTSPServer
+    glib::wrapper! {
+        pub struct Server(ObjectSubclass<imp::Server>) @extends gstreamer_rtsp_server::RTSPServer;
+    }
+
+    impl Default for Server {
+        // Creates a new instance of our factory
+        fn default() -> Server {
+            glib::Object::new()
+        }
+    }
+}
+
+// Our custom RTSP client subclass.
+mod client {
+    use gstreamer_rtsp_server::subclass::prelude::*;
+
+    // In the imp submodule we include the actual implementation
+    mod imp {
+        use super::*;
+
+        // This is the private data of our server
+        #[derive(Default)]
+        pub struct Client {}
+
+        // This trait registers our type with the GObject object system and
+        // provides the entry points for creating a new instance and setting
+        // up the class data
+        #[glib::object_subclass]
+        impl ObjectSubclass for Client {
+            const NAME: &'static str = "RsRTSPClient";
+            type Type = super::Client;
+            type ParentType = gstreamer_rtsp_server::RTSPClient;
+        }
+
+        // Implementation of glib::Object virtual methods
+        impl ObjectImpl for Client {}
+
+        // Implementation of gstreamer_rtsp_server::RTSPClient virtual methods
+        impl RTSPClientImpl for Client {
+            fn closed(&self) {
+                let client = self.obj();
+                self.parent_closed();
+                println!("Client {client:?} closed");
+            }
+
+            fn describe_request(&self, ctx: &gstreamer_rtsp_server::RTSPContext) {
+                self.parent_describe_request(ctx);
+                let request_uri = ctx.uri().unwrap().request_uri();
+                println!("Describe request for uri: {request_uri:?}");
+            }
+        }
+    }
+
+    // This here defines the public interface of our factory and implements
+    // the corresponding traits so that it behaves like any other RTSPClient
+    glib::wrapper! {
+        pub struct Client(ObjectSubclass<imp::Client>) @extends gstreamer_rtsp_server::RTSPClient;
+    }
+
+    impl Default for Client {
+        // Creates a new instance of our factory
+        fn default() -> Client {
+            glib::Object::new()
+        }
+    }
+}
+
+mod mount_points {
+    use gstreamer_rtsp_server::subclass::prelude::*;
+
+    mod imp {
+        use super::*;
+
+        // This is the private data of our mount points
+        #[derive(Default)]
+        pub struct MountPoints {}
+
+        // This trait registers our type with the GObject object system and
+        // provides the entry points for creating a new instance and setting
+        // up the class data
+        #[glib::object_subclass]
+        impl ObjectSubclass for MountPoints {
+            const NAME: &'static str = "RsRTSPMountPoints";
+            type Type = super::MountPoints;
+            type ParentType = gstreamer_rtsp_server::RTSPMountPoints;
+        }
+
+        // Implementation of glib::Object virtual methods
+        impl ObjectImpl for MountPoints {}
+
+        // Implementation of gstreamer_rtsp_server::RTSPClient virtual methods
+        impl RTSPMountPointsImpl for MountPoints {
+            fn make_path(
+                &self,
+                url: &gstreamer_rtsp_server::gst_rtsp::RTSPUrl,
+            ) -> Option<glib::GString> {
+                println!("Make path called for {url:?} ");
+                self.parent_make_path(url)
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct MountPoints(ObjectSubclass<imp::MountPoints>) @extends gstreamer_rtsp_server::RTSPMountPoints;
+    }
+
+    impl Default for MountPoints {
+        // Creates a new instance of our factory
+        fn default() -> Self {
+            glib::Object::new()
+        }
+    }
 }
 
 fn main() {
     gst::init().unwrap();
-
-    let main_loop = glib::MainLoop::new(None, false);
-
-    let server = gstreamer_rtsp_server::RTSPServer::new();
-    let mounts = server.mount_points().unwrap();
-    let factory = gstreamer_rtsp_server::RTSPMediaFactory::new();
-    factory
-        .set_launch("( appsrc name=mysrc ! videoconvert ! x264enc ! rtph264pay name=pay0 pt=96 )");
-
-    factory.connect("media-configure", false, |args| {
-        println!("media-configure");
-        let media = args[1].get::<gstreamer_rtsp_server::RTSPMedia>().unwrap();
-        let element = media.element();
-        let bin = element.dynamic_cast::<gst::Bin>().unwrap();
-
-        let appsrc = bin
-            .by_name_recurse_up("mysrc")
-            .unwrap()
-            .dynamic_cast::<gstreamer_app::AppSrc>()
-            .unwrap();
-        appsrc.set_property_from_str("format", "time");
-        let appsrc_caps = gst::caps::Caps::builder("video/x-raw")
-            .field("format", "RBG16")
-            .field("width", 384)
-            .field("height", 288)
-            // .field("framerate", "60")
-            .build();
-        appsrc.set_caps(Some(&appsrc_caps));
-        // let mut timestamp: ClockTime = Default::default();
-
-        appsrc.connect("need-data", false, |args| {
-            println!("pushing data");
-            let element: gst::Element = args[0].get::<gst::Element>().unwrap();
-            let appsrc = element.dynamic_cast::<gstreamer_app::AppSrc>().unwrap();
-
-            let mut frame_buffer = create_blue_frame_buffer();
-            // frame_buffer.set_pts(pts);
-            // frame_buffer.set_duration(gst::ClockTime::SECOND);
-
-            // timestamp = timestamp + frame_buffer.duration().unwrap();
-            //timestamp + gst::ClockTime::SECOND;
-
-            let ret = appsrc
-                .emit_by_name_with_values("push-buffer", &[frame_buffer.into()])
-                .unwrap();
-            None
-        });
-        None
-    });
-
-    // TODO
-    //   gst_rtsp_mount_points_add_factory(mounts, "/test", factory);
-    mounts.add_factory("/test", factory);
-
-    let timestamp = gst::ClockTime::default();
-    let result = server.attach(None).unwrap();
-    main_loop.run();
+    main_loop().unwrap();
 }
