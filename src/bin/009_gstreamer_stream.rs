@@ -1,182 +1,92 @@
 extern crate anyhow;
 extern crate glib;
+extern crate glib_sys;
 extern crate gst;
+extern crate gstreamer_rtsp_server;
 extern crate termion;
 
-use std::{thread, time};
+use gst::{prelude::*, ClockTime};
+use gstreamer_rtsp_server::prelude::{
+    RTSPMediaExt, RTSPMediaFactoryExt, RTSPMountPointsExt, RTSPServerExt, RTSPServerExtManual,
+};
 
-use anyhow::Error;
-use glib::FlagsClass;
-use gst::prelude::*;
-use termion::{event::Key, input::TermRead};
+const WIDTH: usize = 384;
+const HEIGHT: usize = 288;
+const BYTES_PER_PIXEL: usize = 2;
+const FRAME_SIZE: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL; // RGB16
 
-fn analyze_streams(playbin: &gst::Element) {
-    let n_video = playbin.property::<i32>("n-video");
-    let n_audio = playbin.property::<i32>("n-audio");
-    let n_text = playbin.property::<i32>("n-text");
-    println!("{n_video} video stream(s), {n_audio} audio stream(s), {n_text} text stream(s)");
-
-    for i in 0..n_video {
-        let tags = playbin.emit_by_name::<Option<gst::TagList>>("get-video-tags", &[&i]);
-
-        if let Some(tags) = tags {
-            println!("video stream {i}:");
-            if let Some(codec) = tags.get::<gst::tags::VideoCodec>() {
-                println!("    codec: {}", codec.get());
+fn create_blue_frame_buffer() -> gst::Buffer {
+    let buffer = gst::Buffer::with_size(FRAME_SIZE).unwrap();
+    let mut mapinfo = buffer.into_mapped_buffer_writable().unwrap();
+    unsafe {
+        let ptr = mapinfo.as_mut_ptr() as *mut u16;
+        for i in 0..HEIGHT {
+            for j in 0..WIDTH {
+                let current_pixel_ptr = ptr.offset((i * WIDTH + j) as isize);
+                *current_pixel_ptr = 0b1111100000011111;
             }
         }
     }
-
-    for i in 0..n_audio {
-        let tags = playbin.emit_by_name::<Option<gst::TagList>>("get-audio-tags", &[&i]);
-
-        if let Some(tags) = tags {
-            println!("audio stream {i}:");
-            if let Some(codec) = tags.get::<gst::tags::AudioCodec>() {
-                println!("    codec: {}", codec.get());
-            }
-            if let Some(codec) = tags.get::<gst::tags::LanguageCode>() {
-                println!("    language: {}", codec.get());
-            }
-            if let Some(codec) = tags.get::<gst::tags::Bitrate>() {
-                println!("    bitrate: {}", codec.get());
-            }
-        }
-    }
-
-    for i in 0..n_text {
-        let tags = playbin.emit_by_name::<Option<gst::TagList>>("get-text-tags", &[&i]);
-
-        if let Some(tags) = tags {
-            println!("subtitle stream {i}:");
-            if let Some(codec) = tags.get::<gst::tags::LanguageCode>() {
-                println!("    language: {}", codec.get());
-            }
-        }
-    }
-
-    let current_video = playbin.property::<i32>("current-video");
-    let current_audio = playbin.property::<i32>("current-audio");
-    let current_text = playbin.property::<i32>("current-text");
-    println!(
-        "Currently playing video stream {current_video}, audio stream {current_audio}, text stream {current_text}"
-    );
-    println!("Type any number and hit ENTER to select a different audio stream");
-}
-
-fn handle_keyboard(playbin: &gst::Element, main_loop: &glib::MainLoop) {
-    let mut stdin = termion::async_stdin().keys();
-
-    loop {
-        if let Some(Ok(input)) = stdin.next() {
-            match input {
-                Key::Char(index) => {
-                    if let Some(index) = index.to_digit(10) {
-                        // Here index can only be 0-9
-                        let index = index as i32;
-                        let n_audio = playbin.property::<i32>("n-audio");
-
-                        if index < n_audio {
-                            println!("Setting current audio stream to {index}");
-                            playbin.set_property("current-audio", index);
-                        } else {
-                            eprintln!("Index out of bounds");
-                        }
-                    }
-                }
-                Key::Ctrl('c') => {
-                    main_loop.quit();
-                    break;
-                }
-                _ => continue,
-            };
-        }
-        thread::sleep(time::Duration::from_millis(50));
-    }
+    mapinfo.into_buffer()
 }
 
 fn main() {
-    let main_loop = glib::MainLoop::new(None, false);
-
-    // Initialize GStreamer
     gst::init().unwrap();
 
-    let uri = "https://gstreamer.freedesktop.org/data/media/sintel_cropped_multilingual.webm";
+    let main_loop = glib::MainLoop::new(None, false);
 
-    // Create PlayBin element
-    let playbin = gst::ElementFactory::make("playbin")
-        .name("playbin")
-        // Set URI to play
-        .property("uri", uri)
-        // Set connection speed. This will affect some internal decisions of playbin
-        .property("connection-speed", 56u64)
-        .build()
-        .unwrap();
+    let server = gstreamer_rtsp_server::RTSPServer::new();
+    let mounts = server.mount_points().unwrap();
+    let factory = gstreamer_rtsp_server::RTSPMediaFactory::new();
+    factory
+        .set_launch("( appsrc name=mysrc ! videoconvert ! x264enc ! rtph264pay name=pay0 pt=96 )");
 
-    // Set flags to show Audio and Video but ignore Subtitles
-    let flags = playbin.property_value("flags");
-    let flags_class = FlagsClass::with_type(flags.type_()).unwrap();
+    factory.connect("media-configure", false, |args| {
+        println!("media-configure");
+        let media = args[1].get::<gstreamer_rtsp_server::RTSPMedia>().unwrap();
+        let element = media.element();
+        let bin = element.dynamic_cast::<gst::Bin>().unwrap();
 
-    let flags = flags_class
-        .builder_with_value(flags)
-        .unwrap()
-        .set_by_nick("audio")
-        .set_by_nick("video")
-        .unset_by_nick("text")
-        .build()
-        .unwrap();
-    playbin.set_property_from_value("flags", &flags);
+        let appsrc = bin
+            .by_name_recurse_up("mysrc")
+            .unwrap()
+            .dynamic_cast::<gstreamer_app::AppSrc>()
+            .unwrap();
+        appsrc.set_property_from_str("format", "time");
+        let appsrc_caps = gst::caps::Caps::builder("video/x-raw")
+            .field("format", "RBG16")
+            .field("width", 384)
+            .field("height", 288)
+            // .field("framerate", "60")
+            .build();
+        appsrc.set_caps(Some(&appsrc_caps));
+        // let mut timestamp: ClockTime = Default::default();
 
-    // Handle keyboard input
-    let playbin_clone = playbin.clone();
-    let main_loop_clone = main_loop.clone();
-    thread::spawn(move || handle_keyboard(&playbin_clone, &main_loop_clone));
+        appsrc.connect("need-data", false, |args| {
+            println!("pushing data");
+            let element: gst::Element = args[0].get::<gst::Element>().unwrap();
+            let appsrc = element.dynamic_cast::<gstreamer_app::AppSrc>().unwrap();
 
-    // Add a bus watch, so we get notified when a message arrives
-    let playbin_clone = playbin.clone();
-    let main_loop_clone = main_loop.clone();
-    let bus = playbin.bus().unwrap();
-    let _bus_watch = bus
-        .add_watch(move |_bus, message| {
-            use gst::MessageView;
-            match message.view() {
-                MessageView::Error(err) => {
-                    eprintln!(
-                        "Error received from element {:?} {}",
-                        err.src().map(|s| s.path_string()),
-                        err.error()
-                    );
-                    eprintln!("Debugging information: {:?}", err.debug());
-                    main_loop_clone.quit();
-                    glib::ControlFlow::Break
-                }
-                MessageView::StateChanged(state_changed) => {
-                    if state_changed
-                        .src()
-                        .map(|s| s == &playbin_clone)
-                        .unwrap_or(false)
-                        && state_changed.current() == gst::State::Playing
-                    {
-                        analyze_streams(&playbin_clone);
-                    }
-                    glib::ControlFlow::Continue
-                }
-                MessageView::Eos(..) => {
-                    println!("Reached end of stream");
-                    main_loop_clone.quit();
-                    glib::ControlFlow::Break
-                }
-                _ => glib::ControlFlow::Continue,
-            }
-        })
-        .unwrap();
+            let mut frame_buffer = create_blue_frame_buffer();
+            // frame_buffer.set_pts(pts);
+            // frame_buffer.set_duration(gst::ClockTime::SECOND);
 
-    // Set to PLAYING
-    playbin.set_state(gst::State::Playing).unwrap();
+            // timestamp = timestamp + frame_buffer.duration().unwrap();
+            //timestamp + gst::ClockTime::SECOND;
 
-    // Set GLib mainlooop to run
+            let ret = appsrc
+                .emit_by_name_with_values("push-buffer", &[frame_buffer.into()])
+                .unwrap();
+            None
+        });
+        None
+    });
+
+    // TODO
+    //   gst_rtsp_mount_points_add_factory(mounts, "/test", factory);
+    mounts.add_factory("/test", factory);
+
+    let timestamp = gst::ClockTime::default();
+    let result = server.attach(None).unwrap();
     main_loop.run();
-
-    // Clean up
-    playbin.set_state(gst::State::Null).unwrap();
 }
