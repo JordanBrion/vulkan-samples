@@ -1,5 +1,7 @@
 extern crate anyhow;
+extern crate gstreamer;
 extern crate gstreamer_rtsp_server;
+extern crate gstreamer_video;
 
 use std::fmt::Error;
 
@@ -63,6 +65,26 @@ fn main_loop() -> Result<(), Error> {
     Ok(())
 }
 
+const WIDTH: usize = 384;
+const HEIGHT: usize = 288;
+const BYTES_PER_PIXEL: usize = 2;
+const FRAME_SIZE: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL; // RGB16
+
+fn create_blue_frame_buffer() -> gstreamer::Buffer {
+    let buffer = gstreamer::Buffer::with_size(FRAME_SIZE).unwrap();
+    let mut mapinfo = buffer.into_mapped_buffer_writable().unwrap();
+    unsafe {
+        let ptr = mapinfo.as_mut_ptr() as *mut u16;
+        for i in 0..HEIGHT {
+            for j in 0..WIDTH {
+                let current_pixel_ptr = ptr.offset((i * WIDTH + j) as isize);
+                *current_pixel_ptr = 0b1111100000011111;
+            }
+        }
+    }
+    mapinfo.into_buffer()
+}
+
 // Our custom media factory that creates a media input manually
 mod media_factory {
     use gstreamer_rtsp_server::subclass::prelude::*;
@@ -71,6 +93,8 @@ mod media_factory {
 
     // In the imp submodule we include the actual implementation
     mod imp {
+        use gstreamer_video::VideoFrameExt;
+
         use super::*;
 
         // This is the private data of our factory
@@ -105,29 +129,113 @@ mod media_factory {
             fn create_element(
                 &self,
                 _url: &gstreamer_rtsp_server::gst_rtsp::RTSPUrl,
-            ) -> Option<gst::Element> {
+            ) -> Option<gstreamer::Element> {
                 // Create a simple VP8 videotestsrc input
-                let bin = gst::Bin::default();
-                let src = gst::ElementFactory::make("videotestsrc")
-                    // Configure the videotestsrc live
-                    .property("is-live", true)
-                    .build()
-                    .unwrap();
-                let enc = gst::ElementFactory::make("vp8enc")
-                    // Produce encoded data as fast as possible
-                    .property("deadline", 1i64)
-                    .build()
-                    .unwrap();
+                let bin = gstreamer::Bin::default();
 
-                // The names of the payloaders must be payX
-                let pay = gst::ElementFactory::make("rtpvp8pay")
+                let video_info = gstreamer_video::VideoInfo::builder(
+                    gstreamer_video::VideoFormat::Rgb16,
+                    384 as u32,
+                    288 as u32,
+                )
+                .fps(gstreamer::Fraction::new(2, 1))
+                .build()
+                .expect("Failed to create video info");
+
+                let appsrc = gstreamer_app::AppSrc::builder()
+                    .name("mysrc")
+                    .caps(&video_info.to_caps().unwrap())
+                    .format(gstreamer::Format::Time)
+                    .build();
+
+                appsrc.set_callbacks(
+                    // Since our appsrc element operates in pull mode (it asks us to provide data),
+                    // we add a handler for the need-data callback and provide new data from there.
+                    // In our case, we told gstreamer that we do 2 frames per second. While the
+                    // buffers of all elements of the pipeline are still empty, this will be called
+                    // a couple of times until all of them are filled. After this initial period,
+                    // this handler will be called (on average) twice per second.
+                    gstreamer_app::AppSrcCallbacks::builder()
+                        .need_data(move |appsrc, _| {
+                            // We only produce 100 frames
+
+                            let r = 255;
+                            let g = 255;
+                            let b = 255;
+
+                            // // Create the buffer that can hold exactly one BGRx frame.
+                            // let mut buffer =
+                            //     gstreamer::Buffer::with_size(video_info.size()).unwrap();
+                            // {
+                            //     let buffer = buffer.get_mut().unwrap();
+                            //     // For each frame we produce, we set the timestamp when it should be displayed
+                            //     // (pts = presentation time stamp)
+                            //     // The autovideosink will use this information to display the frame at the right time.
+                            //     // buffer.set_pts(i * 500 * gstreamer::ClockTime::MSECOND);
+
+                            //     // At this point, buffer is only a reference to an existing memory region somewhere.
+                            //     // When we want to access its content, we have to map it while requesting the required
+                            //     // mode of access (read, read/write).
+                            //     // See: https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html
+                            //     let mut vframe =
+                            //         gstreamer_video::VideoFrameRef::from_buffer_ref_writable(
+                            //             buffer,
+                            //             &video_info,
+                            //         )
+                            //         .unwrap();
+
+                            //     // Remember some values from the frame for later usage
+                            //     let width = vframe.width() as usize;
+                            //     let height = vframe.height() as usize;
+
+                            //     // Each line of the first plane has this many bytes
+                            //     let stride = vframe.plane_stride()[0] as usize;
+
+                            //     // Iterate over each of the height many lines of length stride
+                            //     for line in vframe
+                            //         .plane_data_mut(0)
+                            //         .unwrap()
+                            //         .chunks_exact_mut(stride)
+                            //         .take(height)
+                            //     {
+                            //         // Iterate over each pixel of 4 bytes in that line
+                            //         for pixel in line[..(4 * width)].chunks_exact_mut(4) {
+                            //             pixel[0] = b;
+                            //             pixel[1] = g;
+                            //             pixel[2] = r;
+                            //             pixel[3] = 0;
+                            //         }
+                            //     }
+                            // }
+
+                            // appsrc already handles the error here
+                            let _ = appsrc.push_buffer(create_blue_frame_buffer());
+                        })
+                        .build(),
+                );
+
+                let video_convert = gstreamer::ElementFactory::make("videoconvert")
+                    .name("video_convert")
+                    .build()
+                    .unwrap();
+                let x264enc = gstreamer::ElementFactory::make("x264enc")
+                    .name("x264enc")
+                    .build()
+                    .unwrap();
+                let rtph264pay = gstreamer::ElementFactory::make("rtph264pay")
                     .name("pay0")
+                    .property_from_str("pt", "96")
                     .build()
                     .unwrap();
-
-                bin.add_many([&src, &enc, &pay]).unwrap();
-                gst::Element::link_many([&src, &enc, &pay]).unwrap();
-
+                bin.add_many([appsrc.upcast_ref(), &video_convert, &x264enc, &rtph264pay])
+                    .unwrap();
+                gstreamer::Element::link_many([
+                    appsrc.upcast_ref(),
+                    &video_convert,
+                    &x264enc,
+                    &rtph264pay,
+                ])
+                .unwrap();
                 Some(bin.upcast())
             }
         }
@@ -178,7 +286,7 @@ mod media {
                 &self,
                 sdp: &mut gstreamer_rtsp_server::gst_sdp::SDPMessageRef,
                 info: &gstreamer_rtsp_server::subclass::SDPInfo,
-            ) -> Result<(), gst::LoggableError> {
+            ) -> Result<(), gstreamer::LoggableError> {
                 self.parent_setup_sdp(sdp, info)?;
 
                 sdp.add_attribute("my-custom-attribute", Some("has-a-value"));
@@ -362,6 +470,6 @@ mod mount_points {
 }
 
 fn main() {
-    gst::init().unwrap();
+    gstreamer::init().unwrap();
     main_loop().unwrap();
 }
