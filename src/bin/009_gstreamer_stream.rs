@@ -7,26 +7,24 @@ use std::fmt::Error;
 
 use gstreamer_rtsp_server::prelude::*;
 
-#[derive(Debug)]
-struct NoMountPoints;
-
 fn main_loop() -> Result<(), Error> {
     let main_loop = glib::MainLoop::new(None, false);
     let server = server::Server::default();
 
-    let mounts = mount_points::MountPoints::default();
+    let mounts = gstreamer_rtsp_server::RTSPMountPoints::default();
     server.set_mount_points(Some(&mounts));
 
     // Much like HTTP servers, RTSP servers have multiple endpoints that
     // provide different streams. Here, we ask our server to give
     // us a reference to his list of endpoints, so we can add our
     // test endpoint, providing the pipeline from the cli.
-    let mounts = server.mount_points().ok_or(NoMountPoints).unwrap();
+    let mounts = server.mount_points().unwrap();
 
     // Next, we create our custom factory for the endpoint we want to create.
     // The job of the factory is to create a new pipeline for each client that
     // connects, or (if configured to do so) to reuse an existing pipeline.
     let factory = media_factory::Factory::default();
+
     // This setting specifies whether each connecting client gets the output
     // of a new instance of the pipeline, or whether all connected clients share
     // the output of the same pipeline.
@@ -78,7 +76,7 @@ fn create_blue_frame_buffer() -> gstreamer::Buffer {
         for i in 0..HEIGHT {
             for j in 0..WIDTH {
                 let current_pixel_ptr = ptr.offset((i * WIDTH + j) as isize);
-                *current_pixel_ptr = 0b1111100000011111;
+                *current_pixel_ptr = !0b1111100000011111;
             }
         }
     }
@@ -157,57 +155,6 @@ mod media_factory {
                     // this handler will be called (on average) twice per second.
                     gstreamer_app::AppSrcCallbacks::builder()
                         .need_data(move |appsrc, _| {
-                            // We only produce 100 frames
-
-                            let r = 255;
-                            let g = 255;
-                            let b = 255;
-
-                            // // Create the buffer that can hold exactly one BGRx frame.
-                            // let mut buffer =
-                            //     gstreamer::Buffer::with_size(video_info.size()).unwrap();
-                            // {
-                            //     let buffer = buffer.get_mut().unwrap();
-                            //     // For each frame we produce, we set the timestamp when it should be displayed
-                            //     // (pts = presentation time stamp)
-                            //     // The autovideosink will use this information to display the frame at the right time.
-                            //     // buffer.set_pts(i * 500 * gstreamer::ClockTime::MSECOND);
-
-                            //     // At this point, buffer is only a reference to an existing memory region somewhere.
-                            //     // When we want to access its content, we have to map it while requesting the required
-                            //     // mode of access (read, read/write).
-                            //     // See: https://gstreamer.freedesktop.org/documentation/plugin-development/advanced/allocation.html
-                            //     let mut vframe =
-                            //         gstreamer_video::VideoFrameRef::from_buffer_ref_writable(
-                            //             buffer,
-                            //             &video_info,
-                            //         )
-                            //         .unwrap();
-
-                            //     // Remember some values from the frame for later usage
-                            //     let width = vframe.width() as usize;
-                            //     let height = vframe.height() as usize;
-
-                            //     // Each line of the first plane has this many bytes
-                            //     let stride = vframe.plane_stride()[0] as usize;
-
-                            //     // Iterate over each of the height many lines of length stride
-                            //     for line in vframe
-                            //         .plane_data_mut(0)
-                            //         .unwrap()
-                            //         .chunks_exact_mut(stride)
-                            //         .take(height)
-                            //     {
-                            //         // Iterate over each pixel of 4 bytes in that line
-                            //         for pixel in line[..(4 * width)].chunks_exact_mut(4) {
-                            //             pixel[0] = b;
-                            //             pixel[1] = g;
-                            //             pixel[2] = r;
-                            //             pixel[3] = 0;
-                            //         }
-                            //     }
-                            // }
-
                             // appsrc already handles the error here
                             let _ = appsrc.push_buffer(create_blue_frame_buffer());
                         })
@@ -417,53 +364,6 @@ mod client {
     impl Default for Client {
         // Creates a new instance of our factory
         fn default() -> Client {
-            glib::Object::new()
-        }
-    }
-}
-
-mod mount_points {
-    use gstreamer_rtsp_server::subclass::prelude::*;
-
-    mod imp {
-        use super::*;
-
-        // This is the private data of our mount points
-        #[derive(Default)]
-        pub struct MountPoints {}
-
-        // This trait registers our type with the GObject object system and
-        // provides the entry points for creating a new instance and setting
-        // up the class data
-        #[glib::object_subclass]
-        impl ObjectSubclass for MountPoints {
-            const NAME: &'static str = "RsRTSPMountPoints";
-            type Type = super::MountPoints;
-            type ParentType = gstreamer_rtsp_server::RTSPMountPoints;
-        }
-
-        // Implementation of glib::Object virtual methods
-        impl ObjectImpl for MountPoints {}
-
-        // Implementation of gstreamer_rtsp_server::RTSPClient virtual methods
-        impl RTSPMountPointsImpl for MountPoints {
-            fn make_path(
-                &self,
-                url: &gstreamer_rtsp_server::gst_rtsp::RTSPUrl,
-            ) -> Option<glib::GString> {
-                println!("Make path called for {url:?} ");
-                self.parent_make_path(url)
-            }
-        }
-    }
-
-    glib::wrapper! {
-        pub struct MountPoints(ObjectSubclass<imp::MountPoints>) @extends gstreamer_rtsp_server::RTSPMountPoints;
-    }
-
-    impl Default for MountPoints {
-        // Creates a new instance of our factory
-        fn default() -> Self {
             glib::Object::new()
         }
     }
