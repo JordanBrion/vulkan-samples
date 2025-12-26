@@ -483,9 +483,9 @@ dependencies = [
 
 [[package]]
 name = "gstreamer-rtsp"
-version = "0.24.2"
+version = "0.24.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e286381af1e41898fc1a515c5ab62306d1db7e216f20b052c8999f05f0ee26f0"
+checksum = "8a8ba1cfda50a41437360ffaa9250e23b82808ad71045b7e2fc1c02f22e4f9c4"
 dependencies = [
  "glib",
  "gstreamer",
@@ -1430,6 +1430,7 @@ dependencies = [
  "glib-sys",
  "gstreamer",
  "gstreamer-app",
+ "gstreamer-rtsp",
  "gstreamer-rtsp-server",
  "gstreamer-utils",
  "gstreamer-video",
