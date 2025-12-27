@@ -6,6 +6,7 @@ extern crate gstreamer_rtsp_server as gst_rtsp_server;
 use glib::prelude::*;
 use gst_rtsp_server::prelude::*;
 use gst_rtsp_server::subclass::prelude::*;
+use std::ops::{Deref, DerefMut};
 use std::sync::Mutex;
 
 const WIDTH: usize = 384;
@@ -34,7 +35,7 @@ mod imp {
 
     #[derive(Default)]
     pub struct CustomFactory {
-        pub value666: i8,
+        pub value666: Mutex<i8>,
     }
 
     #[glib::object_subclass]
@@ -119,21 +120,20 @@ glib::wrapper! {
 
 impl CustomFactory {
     pub fn new(val: i8) -> Self {
-        let obj: Self = glib::Object::new();
+        let mut obj: Self = glib::Object::new();
         // Set the initial value
         obj.set_value666(val);
         obj
     }
 
     // 3. Add helper methods to the public wrapper to get/set the value
-    pub fn set_value666(&self, val: i8) {
-        let imp = self.imp();
-        let mut value = imp.value666;
-        value = val;
+    pub fn set_value666(&mut self, val: i8) {
+        let mut value = self.imp().value666.lock().unwrap();
+        *value = val;
     }
 
     pub fn value666(&self) -> i8 {
-        self.imp().value666
+        *self.imp().value666.lock().unwrap()
     }
 }
 
@@ -148,6 +148,8 @@ fn main() {
     // 4. Set up the custom factory
     let factory = CustomFactory::new(56);
     factory.set_shared(true); // Share the same pipeline across clients
+
+    println!("value jordan {}", factory.value666());
 
     // 5. Attach the factory to a path
     mounts.add_factory("/test", factory);
