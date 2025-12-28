@@ -1,18 +1,19 @@
-extern crate glib;
-extern crate gstreamer as gst;
-extern crate gstreamer_rtsp as gst_rtsp;
-extern crate gstreamer_rtsp_server as gst_rtsp_server;
+use gstreamer::{self as gst, glib::subclass::types::ObjectSubclassIsExt};
+use gstreamer_rtsp_server as gst_rtsp_server;
 
-use glib::prelude::*;
+// Use the re-exported glib to ensure trait compatibility
+use gst::glib;
 use gst_rtsp_server::prelude::*;
-use gst_rtsp_server::subclass::prelude::*;
-use std::ops::{Deref, DerefMut};
+
+// Explicitly import to resolve "ambiguous glob import" error
+use glib::subclass::prelude::ObjectSubclass;
+
 use std::sync::Mutex;
 
 const WIDTH: usize = 384;
 const HEIGHT: usize = 288;
 const BYTES_PER_PIXEL: usize = 2;
-const FRAME_SIZE: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL; // RGB16
+const FRAME_SIZE: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL;
 
 fn create_blue_frame_buffer() -> gstreamer::Buffer {
     let buffer = gstreamer::Buffer::with_size(FRAME_SIZE).unwrap();
@@ -29,9 +30,10 @@ fn create_blue_frame_buffer() -> gstreamer::Buffer {
     mapinfo.into_buffer()
 }
 
-// 1. Implementation Module
 mod imp {
     use super::*;
+    // You MUST include the rtsp_server subclass prelude specifically
+    use gst_rtsp_server::subclass::prelude::*;
 
     #[derive(Default)]
     pub struct CustomFactory {
@@ -41,17 +43,16 @@ mod imp {
     #[glib::object_subclass]
     impl ObjectSubclass for CustomFactory {
         const NAME: &'static str = "CustomRTSPMediaFactory";
-        type Type = super::CustomFactory; // Refers to the wrapper below
+        type Type = super::CustomFactory;
         type ParentType = gst_rtsp_server::RTSPMediaFactory;
     }
 
     impl ObjectImpl for CustomFactory {}
-
     impl RTSPMediaFactoryImpl for CustomFactory {
         fn create_element(
             &self,
-            _url: &gstreamer_rtsp_server::gst_rtsp::RTSPUrl,
-        ) -> Option<gstreamer::Element> {
+            _url: &gst_rtsp_server::gst_rtsp::RTSPUrl,
+        ) -> Option<gst::Element> {
             // Create a simple VP8 videotestsrc input
             let bin = gstreamer::Bin::default();
 
@@ -112,7 +113,6 @@ mod imp {
     }
 }
 
-// 2. Public Wrapper for the GObject
 glib::wrapper! {
     pub struct CustomFactory(ObjectSubclass<imp::CustomFactory>)
         @extends gst_rtsp_server::RTSPMediaFactory;
@@ -120,14 +120,12 @@ glib::wrapper! {
 
 impl CustomFactory {
     pub fn new(val: i8) -> Self {
-        let mut obj: Self = glib::Object::new();
-        // Set the initial value
+        let obj: Self = glib::Object::new();
         obj.set_value666(val);
         obj
     }
 
-    // 3. Add helper methods to the public wrapper to get/set the value
-    pub fn set_value666(&mut self, val: i8) {
+    pub fn set_value666(&self, val: i8) {
         let mut value = self.imp().value666.lock().unwrap();
         *value = val;
     }
@@ -138,25 +136,20 @@ impl CustomFactory {
 }
 
 fn main() {
-    // 3. Initialize GStreamer
     gst::init().expect("Failed to initialize GStreamer");
 
     let main_loop = glib::MainLoop::new(None, false);
     let server = gst_rtsp_server::RTSPServer::new();
     let mounts = server.mount_points().expect("Could not get mount points");
 
-    // 4. Set up the custom factory
     let factory = CustomFactory::new(56);
-    factory.set_shared(true); // Share the same pipeline across clients
+    factory.set_shared(true);
 
-    println!("value jordan {}", factory.value666());
-
-    // 5. Attach the factory to a path
+    println!("Value: {}", factory.value666());
     mounts.add_factory("/test", factory);
 
-    // 6. Start the server on default port 8554
     let _id = server.attach(None).expect("Failed to attach server");
 
-    println!("Server running! Use: ffplay rtsp://127.0.0.1:8554/test");
+    println!("Server running at rtsp://127.0.0.1:8554/test");
     main_loop.run();
 }

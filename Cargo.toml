@@ -2,6 +2,7 @@
 name = "vk_001_compute_pipeline"
 version = "0.1.0"
 authors = ["jordanbrion"]
+edition = "2021"
 
 [dependencies]
 ash = "0.29.0"
@@ -10,13 +11,12 @@ num = "0.2.0"
 nalgebra-glm = "0.5.0"
 jpeg-decoder = "0.1"
 png = "0.15.2"
-glib = "0.21.3"
 anyhow = "1.0.100"
 termion = "4.0.5"
-gstreamer-rtsp-server = "0.24.2"
-gstreamer-utils = "0.24.2"
-gstreamer-app = "0.24.2"
-gstreamer-video = "0.24.2"
-glib-sys = "0.21.2"
-gstreamer = "0.24.2"
-gstreamer-rtsp = "0.24.4"
+gstreamer = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer" }
+gstreamer-app = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-app" }
+gstreamer-rtsp = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-rtsp" }
+gstreamer-rtsp-server = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-rtsp-server" }
+gstreamer-utils = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-utils" }
+gstreamer-video = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-video" }
+gstreamer-vulkan = { git = "https://github.com/GStreamer/gstreamer-rs", package = "gstreamer-vulkan" }
